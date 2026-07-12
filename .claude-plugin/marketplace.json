@@ -1,0 +1,33 @@
+{
+  "name": "my-claude-marketplace",
+  "owner": {
+    "name": "Staler2019",
+    "email": "abcde121234@gmail.com"
+  },
+  "metadata": {
+    "description": "Personal marketplace bundling curated Claude Code skill plugins."
+  },
+  "plugins": [
+    {
+      "name": "mattpocock-skills",
+      "source": {
+        "source": "github",
+        "repo": "mattpocock/skills"
+      },
+      "description": "Skills for Real Engineers - Matt Pocock's engineering and productivity skills, straight from his .claude directory."
+    },
+    {
+      "name": "product-design-harness",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/cis2042/product-design-harness.git",
+        "path": "skills/product-design-harness"
+      },
+      "description": "Agentic Design Process with Designer-in-the-Loop product judgment across User, Evidence, and Business flows.",
+      "strict": false,
+      "skills": [
+        "./SKILL.md"
+      ]
+    }
+  ]
+}
