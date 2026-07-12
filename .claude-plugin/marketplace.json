@@ -26,7 +26,7 @@
       "description": "Agentic Design Process with Designer-in-the-Loop product judgment across User, Evidence, and Business flows.",
       "strict": false,
       "skills": [
-        "./SKILL.md"
+        "."
       ]
     }
   ]
