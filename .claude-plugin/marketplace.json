@@ -28,6 +28,11 @@
       "skills": [
         "."
       ]
+    },
+    {
+      "name": "code-review",
+      "source": "./plugins/code-review",
+      "description": "Language-agnostic code review. Delegates to an orchestrator subagent that returns a severity-tabulated report per category, keeping the main session context clean."
     }
   ]
 }

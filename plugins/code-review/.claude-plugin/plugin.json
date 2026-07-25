@@ -1,0 +1,9 @@
+{
+  "name": "code-review",
+  "version": "0.1.0",
+  "description": "Language-agnostic code review with a clean-context orchestrator and per-category severity tables.",
+  "author": {
+    "name": "Staler2019",
+    "email": "abcde121234@gmail.com"
+  }
+}
