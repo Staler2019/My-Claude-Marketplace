@@ -33,6 +33,18 @@
       "name": "code-review",
       "source": "./plugins/code-review",
       "description": "Language-agnostic code review. Delegates to an orchestrator subagent that returns a severity-tabulated report per category, keeping the main session context clean."
+    },
+    {
+      "name": "asd-ste100-skill",
+      "source": {
+        "source": "github",
+        "repo": "danyuchn/asd-ste100-skill"
+      },
+      "description": "Rewrites English text to ASD-STE100 Simplified Technical English so it can be parsed without a human to resolve ambiguity - tool descriptions, error messages, inter-agent instructions, and system prompts.",
+      "strict": false,
+      "skills": [
+        "."
+      ]
     }
   ]
 }
