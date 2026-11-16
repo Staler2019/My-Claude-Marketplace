@@ -1,0 +1,9 @@
+{
+  "name": "messenger-bubbles",
+  "version": "0.1.0",
+  "description": "Messenger-style transcript: your prompts right-aligned, Claude's replies left-aligned, both in bubbles",
+  "author": {
+    "name": "Staler2019",
+    "email": "abcde121234@gmail.com"
+  }
+}
