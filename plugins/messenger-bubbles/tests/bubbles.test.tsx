@@ -52,3 +52,21 @@ test('a task notification keeps the engine row', async ($, on) => {
   expect(await ui.find({ type: 'Box', props: { borderStyle: 'round' } })).toBeFalsy()
   await ui.unmount()
 })
+
+test('a summary row is wrapped in a left bubble, keeping the engine drawing', async ($, on) => {
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+
+    return <Text>engine summary</Text>
+  })
+
+  const ui = await $.ui.mount({
+    ...ASSISTANT,
+    props: { ...ASSISTANT.props, isSummary: true },
+  })
+
+  expect(await ui.find({ type: 'Box', props: { justifyContent: 'flex-start' } })).toBeTruthy()
+  expect(await ui.find({ type: 'Box', props: { borderStyle: 'round' } })).toBeTruthy()
+  expect((await ui.find({ type: 'Text', text: /engine summary/ }))?.text).toBe('engine summary')
+  await ui.unmount()
+})

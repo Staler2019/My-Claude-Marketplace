@@ -23,18 +23,17 @@ export const register: Register = on => {
     )
   })
 
-  on('ui.render', { component: 'AssistantMessage' }, ($, e, next) => {
-    // A summary row carries a mark only the engine's drawing keeps.
-    if (e.props.isSummary) {
-      return next(e)
-    }
-
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     const { Box, Markdown } = $.ui.resolve(e)
+
+    // A summary row carries a mark only the engine's drawing keeps, so the
+    // bubble wraps that drawing instead of redrawing the text.
+    const body = e.props.isSummary ? await next(e) : <Markdown text={e.props.text} />
 
     return (
       <Box flexDirection="row" justifyContent="flex-start" marginTop={1}>
         <Box borderStyle="round" borderColor="claude" paddingX={1} flexShrink={1} marginRight={GUTTER}>
-          <Markdown text={e.props.text} />
+          {body}
         </Box>
       </Box>
     )
