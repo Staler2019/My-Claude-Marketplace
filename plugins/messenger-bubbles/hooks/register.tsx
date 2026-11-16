@@ -1,3 +1,4 @@
+import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement, RenderInput } from 'claude-code'
 
 // Cells kept free on the far side of a bubble, so a long message never spans
@@ -7,6 +8,8 @@ const GUTTER = 8
 // The glyph the terminal opens a tool row with, repainted in place while the
 // tool runs: steady, where the engine's own blinks.
 const RUNNING_DOT = '⏺'
+
+const now = atom({ plugin: 'messenger-bubbles', key: 'now' } as const, 0)
 
 export const register: Register = on => {
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
@@ -30,12 +33,51 @@ export const register: Register = on => {
     )
   })
 
+  // When the mod first saw each running call of a live group, by call; the
+  // engine keeps its own elapsed time to itself, so the title counts from here.
+  const startedAt = new Map<string, number>()
+
+  on('session.start', async ($, e, next) => {
+    // Ticks only while a live group is counting, so a quiet session redraws nothing.
+    $.clock.every(1000, async () => {
+      if (startedAt.size > 0) {
+        const time = await $.clock.now()
+        await update($, now, () => time)
+      }
+    })
+
+    return next(e)
+  })
+
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
     if (!e.props.isActive) {
+      startedAt.clear()
+
       return next(e)
     }
 
-    return withRunningDot($, e, await next(e))
+    const call = e.props.calls.findLast(c => c.isRunning)
+
+    if (e.props.isExpanded || call === undefined) {
+      return withRunningDot($, e, await next(e))
+    }
+
+    const id = call.tool_use_id ?? `${call.tool}:${JSON.stringify(call.input)}`
+    const time = Math.max(await read($, now), await $.clock.now())
+    const start = startedAt.get(id) ?? time
+    startedAt.set(id, start)
+
+    const { Box, Text } = $.ui.resolve(e)
+    const description = descriptionOf(call.input)
+    const title = description ?? `${call.tool}(${argumentOf(call.input)})`
+
+    return (
+      <Box marginTop={DOT_ROW}>
+        <Text color="yellow" wrap="truncate-end">
+          {`${RUNNING_DOT} ${title} · ${elapsed(time - start)}`}
+        </Text>
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'UserMessage' }, ($, e, next) => {
@@ -105,4 +147,24 @@ const argumentOf = (input: unknown): string => {
   const value = named ?? Object.values(fields).find(value => typeof value === 'string')
 
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
+}
+
+// What a call says it is doing, as the model described it (Bash's `description`).
+const descriptionOf = (input: unknown): string | undefined => {
+  if (typeof input !== 'object' || input === null) {
+    return undefined
+  }
+
+  const description = (input as Record<string, unknown>).description
+
+  return typeof description === 'string' && description.trim() !== ''
+    ? description.replace(/\s+/g, ' ').trim()
+    : undefined
+}
+
+// Elapsed time as the engine writes it: `5s`, then `1m 5s`.
+const elapsed = (ms: number): string => {
+  const seconds = Math.floor(ms / 1000)
+
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
