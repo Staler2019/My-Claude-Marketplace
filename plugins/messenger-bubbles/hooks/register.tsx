@@ -14,7 +14,20 @@ export const register: Register = on => {
       return next(e)
     }
 
-    return withRunningDot($, e, await next(e))
+    // ctrl+o shows the engine's full row; only its dot turns yellow there.
+    if (e.props.isExpanded) {
+      return withRunningDot($, e, await next(e))
+    }
+
+    const { Box, Text } = $.ui.resolve(e)
+
+    return (
+      <Box marginTop={DOT_ROW}>
+        <Text color="yellow" wrap="truncate-end">
+          {`${RUNNING_DOT} ${e.props.tool}(${argumentOf(e.props.input)})`}
+        </Text>
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
@@ -76,4 +89,20 @@ const withRunningDot = ($: EngineInterface, e: RenderInput, row: RenderElement):
       </Box>
     </Box>
   )
+}
+
+// The input field a tool's title shows, by the field each built-in names its
+// target with; any other tool shows its first string field.
+const TITLE_FIELDS = ['command', 'file_path', 'notebook_path', 'pattern', 'url', 'query', 'description']
+
+const argumentOf = (input: unknown): string => {
+  if (typeof input !== 'object' || input === null) {
+    return ''
+  }
+
+  const fields = input as Record<string, unknown>
+  const named = TITLE_FIELDS.map(field => fields[field]).find(value => typeof value === 'string')
+  const value = named ?? Object.values(fields).find(value => typeof value === 'string')
+
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
 }
