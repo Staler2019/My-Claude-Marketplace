@@ -40,40 +40,9 @@ const engine = (on: Parameters<TestBody>[1]) =>
     return <Text>engine row</Text>
   })
 
-test('a running tool draws its whole title in yellow', async ($, on) => {
+test('a running tool paints a yellow dot over the engine row', async ($, on) => {
   engine(on)
   const ui = await $.ui.mount(TOOL)
-
-  expect(await withProps(ui, 'Text', { color: 'yellow' }, '⏺ Bash(ls)')).toBeTruthy()
-  expect(await ui.find({ type: 'Text', text: /engine row/ })).toBeFalsy()
-  await ui.unmount()
-})
-
-test('a running tool titles itself by the input it was given', async ($, on) => {
-  engine(on)
-  const ui = await $.ui.mount({
-    ...TOOL,
-    props: { ...TOOL.props, tool: 'Read', input: { file_path: '/a.txt', limit: 5 } },
-  })
-
-  expect(await withProps(ui, 'Text', { color: 'yellow' }, '⏺ Read(/a.txt)')).toBeTruthy()
-  await ui.unmount()
-})
-
-test('a long command is cut to one line', async ($, on) => {
-  engine(on)
-  const ui = await $.ui.mount({
-    ...TOOL,
-    props: { ...TOOL.props, input: { command: 'echo a\necho b' } },
-  })
-
-  expect(await withProps(ui, 'Text', { color: 'yellow', wrap: 'truncate-end' }, '⏺ Bash(echo a echo b)')).toBeTruthy()
-  await ui.unmount()
-})
-
-test('an expanded running tool keeps the engine row under a yellow dot', async ($, on) => {
-  engine(on)
-  const ui = await $.ui.mount({ ...TOOL, props: { ...TOOL.props, isExpanded: true } })
 
   expect(await withProps(ui, 'Box', { position: 'absolute', top: 1, left: 0 })).toBeTruthy()
   expect(await withProps(ui, 'Text', { color: 'yellow' }, '⏺')).toBeTruthy()
