@@ -60,6 +60,9 @@ export const register: Register = on => {
   })
 }
 
+// The engine's tool row opens with one blank line above the dot.
+const DOT_ROW = 1
+
 // Paints a yellow dot over the first cell of the engine's row, leaving the
 // rest of its drawing as it was.
 const withRunningDot = ($: EngineInterface, e: RenderInput, row: RenderElement): RenderElement => {
@@ -68,7 +71,7 @@ const withRunningDot = ($: EngineInterface, e: RenderInput, row: RenderElement):
   return (
     <Box>
       {row}
-      <Box position="absolute" top={0} left={0}>
+      <Box position="absolute" top={DOT_ROW} left={0}>
         <Text color="yellow">{RUNNING_DOT}</Text>
       </Box>
     </Box>

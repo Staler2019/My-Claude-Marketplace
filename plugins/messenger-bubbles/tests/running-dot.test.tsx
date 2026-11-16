@@ -44,7 +44,7 @@ test('a running tool paints a yellow dot over the engine row', async ($, on) => 
   engine(on)
   const ui = await $.ui.mount(TOOL)
 
-  expect(await withProps(ui, 'Box', { position: 'absolute', top: 0, left: 0 })).toBeTruthy()
+  expect(await withProps(ui, 'Box', { position: 'absolute', top: 1, left: 0 })).toBeTruthy()
   expect(await withProps(ui, 'Text', { color: 'yellow' }, '⏺')).toBeTruthy()
   expect((await ui.find({ type: 'Text', text: /engine row/ }))?.text).toBe('engine row')
   await ui.unmount()
