@@ -45,6 +45,11 @@
       "skills": [
         "."
       ]
+    },
+    {
+      "name": "messenger-bubbles",
+      "source": "./plugins/messenger-bubbles",
+      "description": "Messenger-style transcript: your prompts right-aligned, Claude's replies left-aligned, both in bubbles."
     }
   ]
 }
