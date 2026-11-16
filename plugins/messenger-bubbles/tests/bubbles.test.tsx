@@ -1,5 +1,16 @@
 import { expect, test } from 'claude-code/testing'
 
+// `find` matches on type, key and text alone, so props are checked here.
+const withProps = async (
+  ui: { findAll: (q: { type: string }) => Promise<{ props: Record<string, unknown>; text: string }[]> },
+  type: string,
+  props: Record<string, unknown>,
+  text?: string,
+) =>
+  (await ui.findAll({ type })).find(
+    el => Object.entries(props).every(([k, v]) => el.props[k] === v) && (text === undefined || el.text === text),
+  )
+
 const USER = {
   plugin: 'messenger-bubbles',
   component: 'UserMessage',
@@ -17,9 +28,9 @@ const ASSISTANT = {
 test('my prompt is a bubble pushed to the right', async ($, on) => {
   const ui = await $.ui.mount(USER)
 
-  const row = await ui.find({ type: 'Box', props: { justifyContent: 'flex-end' } })
+  const row = await withProps(ui, 'Box', { justifyContent: 'flex-end' })
   expect(row).toBeTruthy()
-  const bubble = await ui.find({ type: 'Box', props: { borderStyle: 'round' } })
+  const bubble = await withProps(ui, 'Box', { borderStyle: 'round' })
   expect(bubble).toBeTruthy()
   expect((await ui.find({ type: 'Text', text: /hello there/ }))?.text).toBe('hello there')
   await ui.unmount()
@@ -28,9 +39,9 @@ test('my prompt is a bubble pushed to the right', async ($, on) => {
 test('a reply is a bubble on the left, drawn as markdown', async ($, on) => {
   const ui = await $.ui.mount(ASSISTANT)
 
-  const row = await ui.find({ type: 'Box', props: { justifyContent: 'flex-start' } })
+  const row = await withProps(ui, 'Box', { justifyContent: 'flex-start' })
   expect(row).toBeTruthy()
-  const bubble = await ui.find({ type: 'Box', props: { borderStyle: 'round' } })
+  const bubble = await withProps(ui, 'Box', { borderStyle: 'round' })
   expect(bubble).toBeTruthy()
   expect(await ui.find({ type: 'Markdown' })).toBeTruthy()
   await ui.unmount()
@@ -49,7 +60,7 @@ test('a task notification keeps the engine row', async ($, on) => {
   })
 
   expect((await ui.find({ type: 'Text', text: /engine/ }))?.text).toBe('engine')
-  expect(await ui.find({ type: 'Box', props: { borderStyle: 'round' } })).toBeFalsy()
+  expect(await withProps(ui, 'Box', { borderStyle: 'round' })).toBeFalsy()
   await ui.unmount()
 })
 
@@ -65,8 +76,8 @@ test('a summary row is wrapped in a left bubble, keeping the engine drawing', as
     props: { ...ASSISTANT.props, isSummary: true },
   })
 
-  expect(await ui.find({ type: 'Box', props: { justifyContent: 'flex-start' } })).toBeTruthy()
-  expect(await ui.find({ type: 'Box', props: { borderStyle: 'round' } })).toBeTruthy()
+  expect(await withProps(ui, 'Box', { justifyContent: 'flex-start' })).toBeTruthy()
+  expect(await withProps(ui, 'Box', { borderStyle: 'round' })).toBeTruthy()
   expect((await ui.find({ type: 'Text', text: /engine summary/ }))?.text).toBe('engine summary')
   await ui.unmount()
 })
