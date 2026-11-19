@@ -9,6 +9,27 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-hook-bypass.py\"",
             "timeout": 10,
             "onFailure": "block"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard-repo-discipline.py\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/block-fuzzy-kill.py\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/backup-before-git-discard.py\"",
+            "timeout": 120,
+            "statusMessage": "可能丟失本機檔案的 git 指令前先備份…"
           }
         ]
       }

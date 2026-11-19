@@ -11,7 +11,7 @@ sys.path.insert(0, str(HOOKS))
 
 from lib.shell_text import command_segments, without_heredoc_bodies  # noqa: E402
 
-ENTRY_POINTS = ("guard-hook-bypass.py",)
+ENTRY_POINTS = ("block-fuzzy-kill.py", "guard-repo-discipline.py", "guard-hook-bypass.py")
 
 
 class WithoutHeredocBodies(unittest.TestCase):
@@ -76,6 +76,12 @@ class EntryPoints(unittest.TestCase):
                 source = (HOOKS / name).read_text(encoding="utf-8")
                 self.assertNotIn("def without_heredoc_bodies", source)
                 self.assertIn("from lib.shell_text import", source)
+
+    def test_guard_uses_the_shared_segmenter(self):
+        source = (HOOKS / "guard-repo-discipline.py").read_text(encoding="utf-8")
+        self.assertNotIn("def segments", source)
+        self.assertNotIn("def tokens", source)
+        self.assertIn("command_segments", source)
 
 
 if __name__ == "__main__":
