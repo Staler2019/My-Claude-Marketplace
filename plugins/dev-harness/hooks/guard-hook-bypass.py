@@ -36,6 +36,8 @@ _JOIN_MARKS = re.compile(r"""\$\(\)|``|\$(?=['"])|['"\\]""")
 _BRACE = re.compile(r"\{([^{}]*)\}")
 _SEQUENCE = re.compile(r"^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])(?:\.\.(-?\d+))?$")
 MAX_VARIANTS = 256
+# A brace bash takes as a literal character: escaped, or alone inside quotes.
+_QUOTED_BRACE = re.compile(r"""\\[{}]|"[{}]"|'[{}]'""")
 RAW_MARKERS = (
     (re.compile(SKIP_SPELLINGS), SKIP_FLAG),
     (re.compile(r"(?i)core\.hookspath"), "core.hooksPath"),
@@ -78,6 +80,10 @@ def commit_skips_hooks(rest: list) -> bool:
     return False
 
 
+class _TooMany(Exception):
+    """More brace variants than MAX_VARIANTS."""
+
+
 def _alternatives(inner: str):
     """The words bash makes of one brace group, or None when the group is literal text."""
     sequence = _SEQUENCE.match(inner)
@@ -88,7 +94,9 @@ def _alternatives(inner: str):
             return None
         lo, hi = (int(first), int(last)) if numeric else (ord(first), ord(last))
         values = range(lo, hi + 1, step) if lo <= hi else range(lo, hi - 1, -step)
-        return [str(v) if numeric else chr(v) for v in values][:MAX_VARIANTS]
+        if len(values) > MAX_VARIANTS:
+            raise _TooMany
+        return [str(v) if numeric else chr(v) for v in values]
     parts = inner.split(",")
     return parts if len(parts) > 1 else None
 
@@ -111,8 +119,26 @@ def brace_variants(text: str):
     return done
 
 
+def candidate_texts(cmd: str):
+    """The texts to judge: the command as written, and its brace-expansion variants read both
+    with every `{`/`}` live and with quoted or escaped ones dropped (bash expands neither, and a
+    quoted `}` does not close a group). None when the variants exceed MAX_VARIANTS."""
+    text = cmd.replace("\\\n", "")
+    unquoted_braces = _QUOTED_BRACE.sub("", text)
+    texts = [text]
+    for source in (text, unquoted_braces):
+        try:
+            variants = brace_variants(source)
+        except _TooMany:
+            return None
+        if variants is None:
+            return None
+        texts.extend(variants)
+    return texts
+
+
 def violation(cmd: str):
-    variants = brace_variants(cmd.replace("\\\n", ""))
+    variants = candidate_texts(cmd)
     if variants is None:
         # Not every variant was checked, and braces can spell `git` itself: fail closed.
         return reason("brace expansion")

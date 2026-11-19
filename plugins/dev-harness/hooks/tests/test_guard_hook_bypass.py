@@ -62,8 +62,15 @@ class Denied(unittest.TestCase):
         self.assert_denied("GIT_CONFIG_PARAMETERS", "GIT_CONFIG_PARAMETERS=x git push")
 
 
+    def test_brace_decoys_do_not_hide_the_flag(self):
+        # Quoted, escaped or cross-command braces are not brace groups to bash.
+        self.assert_denied(SKIP, f'echo "{{"; git commit -m "a,b" {SKIP}; echo "}}"',
+                           f"echo {{; git commit -m a, {SKIP}; echo }}",
+                           'git commit {-m"}",--no-ve}rify', "git commit {-m\\},--no-ve}rify")
+
     def test_too_many_brace_variants_fails_closed(self):
-        self.assert_denied("brace", "git commit " + "{a,b}" * 9 + " -m x")
+        self.assert_denied("brace", "git commit " + "{a,b}" * 9 + " -m x", "git commit {1..100000} -m x",
+                           "git commit {1..1000000000000} -m x")
 
 
 class Allowed(unittest.TestCase):
