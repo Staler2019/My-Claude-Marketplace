@@ -19,6 +19,7 @@ REGISTERED = {
     "guard-repo-discipline.py": "Bash",
     "block-fuzzy-kill.py": "Bash",
     "backup-before-git-discard.py": "Bash|PowerShell",
+    "require-plan-structure.py": "Agent|Task",
 }
 
 

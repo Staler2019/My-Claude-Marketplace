@@ -32,6 +32,16 @@
             "statusMessage": "可能丟失本機檔案的 git 指令前先備份…"
           }
         ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/require-plan-structure.py\"",
+            "timeout": 10
+          }
+        ]
       }
     ]
   }
