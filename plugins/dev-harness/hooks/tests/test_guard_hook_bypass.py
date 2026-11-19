@@ -40,7 +40,10 @@ class Denied(unittest.TestCase):
         self.assert_denied(SKIP, f"git commit {SKIP[:-1]} -m x",
                            "git commit --no-\\\nverify -m x", 'git commit "--no-\\\nverify" -m x',
                            "git commit --no-{verify,verify} -m x", f"g'i't commit {SKIP} -m x",
-                           f"gi\\t commit {SKIP} -m x",
+                           f"gi\\t commit {SKIP} -m x", "git commit --no-ve{r,r}ify -m x",
+                           "git commit --n{o,o}-verify -m x", "git commit --no-ve{r..r}ify -m x",
+                           "git commit --{n..n}o-verify -m x", f"g{{i..i}}t commit {SKIP} -m x",
+                           "git commit --no-ver``ify -m x", "git commit --no-ver$()ify -m x",
                            f"git push {SKIP[:-2]} origin main", f"git commit '{SKIP[:-1]}''y' -m x",
                            'git commit "--no-"verify -m x', "git commit -m x --no-$'verify'",
                            "git commit --no-$'ver'ify -m x", 'git commit --no-$"verify" -m x',
@@ -59,10 +62,15 @@ class Denied(unittest.TestCase):
         self.assert_denied("GIT_CONFIG_PARAMETERS", "GIT_CONFIG_PARAMETERS=x git push")
 
 
+    def test_too_many_brace_variants_fails_closed(self):
+        self.assert_denied("brace", "git commit " + "{a,b}" * 9 + " -m x")
+
+
 class Allowed(unittest.TestCase):
     def test_ordinary_commands(self):
         for command in ('git commit -m "no verify"', "git commit --no-edit", "git log --no-walk",
-                        "git fetch --no-verbose", "git commit -mnope", "git commit -m -n",
+                        "git fetch --no-verbose", "git merge --no-verify-signatures main",
+                        "git log --format=%H,%s", 'git commit -m "{a,b} $HOME"',"git commit -mnope", "git commit -m -n",
                         "git log -n 3", "git commit -F notes.txt", "echo hello", ""):
             with self.subTest(command=command):
                 self.assertIsNone(decide(command))
