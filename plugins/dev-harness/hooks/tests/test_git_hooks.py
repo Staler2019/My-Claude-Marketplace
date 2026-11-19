@@ -126,6 +126,38 @@ class PreCommit(Repo):
         self.assertIn("dev-harness", result.stderr)
 
 
+class CommitMessage(Repo):
+    def test_token_in_the_message_is_rejected_and_masked(self):
+        self.write("ok.txt", "fine\n")
+        self.git("add", "ok.txt")
+        result = self.git("commit", "-m", f"debug: token was {GITHUB_TOKEN}", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("commit-msg:1 github-pat ghp_", result.stderr)
+        self.assertNotIn(GITHUB_TOKEN, result.stderr + result.stdout)
+
+    def test_home_path_in_the_message_is_rejected(self):
+        self.write("ok.txt", "fine\n")
+        self.git("add", "ok.txt")
+        result = self.git("commit", "-m", f"see {self.home}/notes", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("personal", result.stderr)
+
+    def test_comment_lines_and_the_verbose_diff_are_not_scanned(self):
+        # git drops `#` lines and everything under the scissors line before storing the message.
+        message = self.tmp / "MSG"
+        message.write_text(f"plain subject\n# {GITHUB_TOKEN}\n"
+                           "# ------------------------ >8 ------------------------\n"
+                           f"+{GITHUB_TOKEN}\n")
+        hooks_dir = self.repo / ".git" / "hooks"
+        result = subprocess.run([sys.executable, str(hooks_dir / "commit-msg"), str(message)], cwd=self.repo,
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        message.write_text(f"subject\nbody {GITHUB_TOKEN}\n")
+        result = subprocess.run([sys.executable, str(hooks_dir / "commit-msg"), str(message)], cwd=self.repo,
+                                env=self.env, capture_output=True, text=True)
+        self.assertIn("commit-msg:2 github-pat", result.stderr)
+
+
 class PrePush(Repo):
     def commit_skipping_hooks(self, name, text, message):
         self.write(name, text)
@@ -147,6 +179,21 @@ class PrePush(Repo):
         result = self.sh("git push origin main")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("private-key-header", result.stderr)
+
+    def test_token_in_a_commit_message_is_rejected_at_push(self):
+        self.write("ok.txt", "fine\n")
+        self.git("add", "ok.txt")
+        self.git("commit", "-q", "--no-verify", "-m", f"oops {GITHUB_TOKEN}")
+        result = self.sh("git push origin main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("message:1 github-pat", result.stderr)
+        self.assertNotIn(GITHUB_TOKEN, result.stderr)
+
+    def test_token_in_an_annotated_tag_message_is_rejected_at_push(self):
+        self.git("tag", "-a", "v1", "-m", f"release {GITHUB_TOKEN}")
+        result = self.sh("git push origin v1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("tag-message:1 github-pat", result.stderr)
 
     def test_clean_push_and_branch_delete_pass(self):
         self.write("ok.txt", "fine\n")

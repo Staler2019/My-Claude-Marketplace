@@ -16,11 +16,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SOURCES = {
     "pre-commit": HERE / "git-hooks" / "pre-commit",
+    "commit-msg": HERE / "git-hooks" / "commit-msg",
     "pre-push": HERE / "git-hooks" / "pre-push",
     "dev_harness_hook.py": HERE / "git-hooks" / "dev_harness_hook.py",
     "secret_scan.py": HERE.parent / "hooks" / "lib" / "secret_scan.py",
 }
 MARKER = "dev-harness"
+HOOK_NAMES = ("pre-commit", "commit-msg", "pre-push")
 
 
 def git(repo: str, *args: str) -> str:
@@ -47,7 +49,7 @@ def main(argv) -> int:
     if git(repo, "config", "core.hooksPath"):
         return fail("core.hooksPath is set, so git would not run .git/hooks")
     hooks = Path(common) / "hooks"
-    for name in ("pre-commit", "pre-push"):
+    for name in HOOK_NAMES:
         existing = hooks / name
         if existing.exists() and MARKER not in existing.read_text(errors="replace"):
             return fail(f"{existing} exists and was not installed by dev-harness")
@@ -59,7 +61,7 @@ def main(argv) -> int:
     conf = hooks / "dev-harness.conf"
     conf.write_text(f"personal={'on' if personal else 'off'}\n")
     written.append(conf)
-    for name in ("pre-commit", "pre-push"):
+    for name in HOOK_NAMES:
         (hooks / name).chmod(0o755)
     for path in written:
         print(path)

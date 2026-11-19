@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 INSTALLER = Path(__file__).resolve().parent.parent.parent / "scripts" / "install-git-hooks"
-COPIED = {"pre-commit", "pre-push", "dev_harness_hook.py", "secret_scan.py", "dev-harness.conf"}
+COPIED = {"pre-commit", "commit-msg", "pre-push", "dev_harness_hook.py", "secret_scan.py", "dev-harness.conf"}
 
 
 class Installer(unittest.TestCase):
@@ -42,7 +42,7 @@ class Installer(unittest.TestCase):
         self.assertEqual(self.dev_harness_files(), COPIED)
         for name in COPIED:
             self.assertIn(str(self.hooks / name), result.stdout)
-        for hook in ("pre-commit", "pre-push"):
+        for hook in ("pre-commit", "commit-msg", "pre-push"):
             self.assertTrue(os.access(self.hooks / hook, os.X_OK))
         self.assertEqual((self.hooks / "dev-harness.conf").read_text(), "personal=on\n")
 
@@ -60,6 +60,11 @@ class Installer(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual((self.hooks / "pre-push").read_text(), "#!/bin/sh\necho mine\n")
         self.assertEqual(self.dev_harness_files(), {"pre-push"})
+
+    def test_refuses_to_overwrite_a_foreign_commit_msg_hook(self):
+        (self.hooks / "commit-msg").write_text("#!/bin/sh\nexit 0\n")
+        self.assertNotEqual(self.install().returncode, 0)
+        self.assertEqual(self.dev_harness_files(), {"commit-msg"})
 
     def test_refuses_a_linked_worktree_and_writes_nothing(self):
         self.git("commit", "-q", "--allow-empty", "-m", "root")

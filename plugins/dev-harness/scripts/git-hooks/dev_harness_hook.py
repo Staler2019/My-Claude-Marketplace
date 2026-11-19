@@ -1,4 +1,4 @@
-"""dev-harness secret guard shared by the pre-commit and pre-push hooks.
+"""dev-harness secret guard shared by the pre-commit, commit-msg and pre-push hooks.
 
 Installed as a self-contained copy next to `secret_scan.py` in a repo's hooks dir; in the
 plugin source tree it finds the scanner in `hooks/lib/`. Any error exits 1: a guard that
@@ -17,6 +17,7 @@ NAME_FLAGS = ("--name-only", "-z", "--no-renames", "--diff-filter=ACMR")
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 ZERO = "0" * 40
 PATTERNS_FILE = "~/.config/dev-harness/personal-patterns.txt"
+SCISSORS = "# ------------------------ >8 ------------------------"
 
 
 def _scanner():
@@ -51,12 +52,28 @@ def _commit_findings(scan, personal) -> List:
     return scan.scan_names(names) + scan.scan_lines(scan.added_lines(patch), personal)
 
 
+def _message_findings(scan, personal, message_file: str) -> List:
+    """The message as git will store it: `#` comment lines and everything below the scissors dropped."""
+    with open(message_file, encoding="utf-8", errors="replace") as fh:
+        text = fh.read().split(SCISSORS, 1)[0]
+    kept = "\n".join("" if line.startswith("#") else line for line in text.split("\n"))
+    return scan.scan_text("commit-msg", kept, personal)
+
+
+def _tag_message(sha: str) -> str:
+    if _git("cat-file", "-t", sha).strip() != "tag":
+        return ""
+    return _git("cat-file", "tag", sha).split("\n\n", 1)[-1]
+
+
 def _push_findings(scan, personal, remote: str, updates: str) -> List:
     findings = []
     for line in updates.splitlines():
         fields = line.split()
         if len(fields) != 4 or fields[1] == ZERO:
             continue
+        for finding in scan.scan_text("tag-message", _tag_message(fields[1]), personal):
+            findings.append(f"{fields[1][:8]} {finding}")
         for commit in _git("rev-list", fields[1], "--not", f"--remotes={remote}").split():
             parents = _git("rev-list", "--parents", "-n", "1", commit).split()[1:] or [EMPTY_TREE]
             for parent in parents:
@@ -64,6 +81,9 @@ def _push_findings(scan, personal, remote: str, updates: str) -> List:
                 patch = _git("diff-tree", "-r", "-p", *DIFF_FLAGS, parent, commit)
                 for finding in scan.scan_names(names) + scan.scan_lines(scan.added_lines(patch), personal):
                     findings.append(f"{commit[:8]} {finding}")
+            message = _git("log", "-1", "--format=%B", commit)
+            for finding in scan.scan_text("message", message, personal):
+                findings.append(f"{commit[:8]} {finding}")
     return findings
 
 
@@ -82,6 +102,8 @@ def main(mode: str) -> int:
         personal = _personal(scan)
         if mode == "commit":
             findings = _commit_findings(scan, personal)
+        elif mode == "message":
+            findings = _message_findings(scan, personal, sys.argv[1])
         else:
             findings = _push_findings(scan, personal, sys.argv[1] if len(sys.argv) > 1 else "", sys.stdin.read())
     except Exception as error:  # fail closed on anything, including a missing scanner
