@@ -92,11 +92,14 @@ class BackupRoot(unittest.TestCase):
         profile = self.tmp / "profile"
         self.assertEqual(self.backup_parent(CLAUDE_CONFIG_DIR=str(profile)),
                          profile / "backups" / "git-discard")
+        self.assertFalse((self.home / ".claude").exists())
 
     def test_empty_or_relative_values_fall_through_to_home(self):
         fallback = self.home / ".claude" / "backups" / "git-discard"
         self.assertEqual(self.backup_parent(), fallback)
         self.assertEqual(self.backup_parent(GIT_DISCARD_BACKUP_ROOT="", CLAUDE_CONFIG_DIR="rel"), fallback)
+        self.assertEqual(self.backup_parent(GIT_DISCARD_BACKUP_ROOT="rel/path", CLAUDE_CONFIG_DIR=""), fallback)
+        self.assertFalse((self.repo / "rel").exists())
 
 
 if __name__ == "__main__":

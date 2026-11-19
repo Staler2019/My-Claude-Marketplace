@@ -135,7 +135,8 @@ class PrePush(Repo):
     def test_secret_added_then_removed_is_still_rejected(self):
         self.commit_skipping_hooks("k.txt", OPENAI_TOKEN + "\n", "add")
         self.commit_skipping_hooks("k.txt", "gone\n", "remove")
-        for command in ("git push origin main", "git push origin HEAD:refs/heads/other", "git push --all origin"):
+        self.git("branch", "other")
+        for command in ("git push origin main", "git push origin other:main", "git push --all origin"):
             with self.subTest(command=command):
                 result = self.sh(command)
                 self.assertNotEqual(result.returncode, 0)

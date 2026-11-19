@@ -60,6 +60,9 @@ class Hook(unittest.TestCase):
         brief = dict(self.verifier(), subagent_type="dev-harness:plan-verifier")
         reason = self.run_hook(brief)
         self.assertTrue(reason.startswith("Blocked by dev-harness/require-plan-structure: "), reason)
+        (self.tmp / "plan.md").write_text(PLAN.replace("## Outcome", "## Goals"), encoding="utf-8")
+        self.say({"type": "user", "message": {"role": "user", "content": SAID}})
+        self.assertIn("No `## Outcome` section.", self.run_hook(brief))
 
     def test_other_agents_pass_through(self):
         self.assertIsNone(self.run_hook({"subagent_type": "scout", "prompt": "find x"}))
