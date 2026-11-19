@@ -37,7 +37,10 @@ class Denied(unittest.TestCase):
 
     def test_abbreviated_or_quote_split_long_flag(self):
         # git accepts any unique prefix of a long option, and the shell joins quoted pieces.
-        self.assert_denied(SKIP, f"git commit {SKIP[:-1]} -m x", f"git commit {SKIP[:-3]} -m x",
+        self.assert_denied(SKIP, f"git commit {SKIP[:-1]} -m x",
+                           "git commit --no-\\\nverify -m x", 'git commit "--no-\\\nverify" -m x',
+                           "git commit --no-{verify,verify} -m x", f"g'i't commit {SKIP} -m x",
+                           f"gi\\t commit {SKIP} -m x",
                            f"git push {SKIP[:-2]} origin main", f"git commit '{SKIP[:-1]}''y' -m x",
                            'git commit "--no-"verify -m x', "git commit -m x --no-$'verify'",
                            "git commit --no-$'ver'ify -m x", 'git commit --no-$"verify" -m x',

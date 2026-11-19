@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """PreToolUse(Bash): refuse git commands that would skip the native pre-commit / pre-push hooks.
 
-Blocked when the raw command mentions `git` and any of: the long skip-verify flag or any
-prefix git would expand to it (quotes removed first, so split spellings are joined), a
-`core.hooksPath` override, or `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT` injection. The raw
-text is checked, so `sh -c '...'` wrappers are caught too. `git commit -n` (alone or in a short
-flag cluster) is judged per segment, so `git commit -m -n` and `git log -n 3` pass.
+The command text is first flattened the way the shell would join a word: backslash-newline
+continuations and every quoting / expansion mark (' " \\ $ { } ,) are removed. Blocked when
+the flattened text mentions `git` and any of: the long skip-verify flag or an abbreviation git
+accepts for it (`--no-veri` and longer; shorter prefixes are ambiguous to git and rejected by
+it), a `core.hooksPath` override, or `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT` injection.
+The whole text is checked, so `sh -c '...'` wrappers are caught too. `git commit -n` (alone or
+in a short flag cluster) is judged per segment, so `git commit -m -n` and `git log -n 3` pass.
 Registered with "onFailure": "block": a crash or timeout of this guard denies the command.
+
+Out of reach of a text check, and not covered: flag text the shell produces at run time —
+`$'\\x..'` / `$'\\NNN'` escape sequences, variable or parameter expansion, command
+substitution, eval, aliases, and commands read from script files. The native hooks cannot
+catch a skipped run either; a server-side scan (e.g. GitHub push protection) is the backstop.
 """
 import json
 import re
@@ -16,11 +23,13 @@ from lib.shell_text import command_segments
 
 PREFIX = "Blocked by dev-harness/guard-hook-bypass:"
 SKIP_FLAG = "--no-" + "verify"
-# git takes any unique prefix of a long option, so `--no-v` … the full flag all count.
-_SKIP_PREFIXES = "".join(f"(?:{re.escape(c)}" for c in SKIP_FLAG[len("--no-v"):]) + ")?" * (
-    len(SKIP_FLAG) - len("--no-v"))
+# git takes a unique prefix of a long option; `--no-veri` is the shortest one that is not
+# ambiguous with `--no-verbose`. No end anchor: brace expansion can leave `--no-verifyverify`.
+SKIP_SHORTEST = SKIP_FLAG[:len("--no-veri")]
+# Shell marks that only join pieces of one word: drop them before matching.
+_JOIN_MARKS = re.compile(r"""\\\n|['"\\${},]""")
 RAW_MARKERS = (
-    (re.compile(re.escape("--no-v") + _SKIP_PREFIXES + r"(?![\w-])"), SKIP_FLAG),
+    (re.compile(re.escape(SKIP_SHORTEST)), SKIP_FLAG),
     (re.compile(r"(?i)core\.hookspath"), "core.hooksPath"),
     (re.compile(r"\bGIT_CONFIG_PARAMETERS\b"), "GIT_CONFIG_PARAMETERS"),
     (re.compile(r"\bGIT_CONFIG_COUNT\b"), "GIT_CONFIG_COUNT"),
@@ -62,11 +71,9 @@ def commit_skips_hooks(rest: list) -> bool:
 
 
 def violation(cmd: str):
-    if "git" not in cmd:
+    joined = _JOIN_MARKS.sub("", cmd)
+    if "git" not in joined:
         return None
-    # The shell joins `'--no-'"verify"` (and `$'…'` / `$"…"`) into one word; judge the text
-    # with quotes, their `$` openers and backslashes taken out.
-    joined = re.sub(r"""\$(?=['"])|['"\\]""", "", cmd)
     for pattern, naming in RAW_MARKERS:
         if pattern.search(joined):
             return reason(naming)
