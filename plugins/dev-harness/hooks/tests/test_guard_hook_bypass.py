@@ -39,7 +39,9 @@ class Denied(unittest.TestCase):
         # git accepts any unique prefix of a long option, and the shell joins quoted pieces.
         self.assert_denied(SKIP, f"git commit {SKIP[:-1]} -m x", f"git commit {SKIP[:-3]} -m x",
                            f"git push {SKIP[:-2]} origin main", f"git commit '{SKIP[:-1]}''y' -m x",
-                           'git commit "--no-"verify -m x')
+                           'git commit "--no-"verify -m x', "git commit -m x --no-$'verify'",
+                           "git commit --no-$'ver'ify -m x", 'git commit --no-$"verify" -m x',
+                           "git push origin main --no-$'verif'")
 
     def test_short_n_on_commit(self):
         self.assert_denied("-n", "git commit -n -m x", "git commit -nm x", "git commit -m x -n",

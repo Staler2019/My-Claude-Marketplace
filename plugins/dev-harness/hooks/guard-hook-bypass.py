@@ -64,8 +64,9 @@ def commit_skips_hooks(rest: list) -> bool:
 def violation(cmd: str):
     if "git" not in cmd:
         return None
-    # The shell joins `'--no-'"verify"` into one word; judge the text with quotes taken out.
-    joined = re.sub(r"""['"\\]""", "", cmd)
+    # The shell joins `'--no-'"verify"` (and `$'…'` / `$"…"`) into one word; judge the text
+    # with quotes, their `$` openers and backslashes taken out.
+    joined = re.sub(r"""\$(?=['"])|['"\\]""", "", cmd)
     for pattern, naming in RAW_MARKERS:
         if pattern.search(joined):
             return reason(naming)
