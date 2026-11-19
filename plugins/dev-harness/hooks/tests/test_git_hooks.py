@@ -1,0 +1,168 @@
+"""End-to-end tests for the native git hooks: real temp repos, hooks installed by the installer.
+
+Tokens and personal values are built at run time; HOME and the global git config are pointed
+at the temp dir so the personal rules see injected values only.
+"""
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+HOOKS = Path(__file__).resolve().parent.parent
+SCRIPTS = HOOKS.parent / "scripts"
+INSTALLER = SCRIPTS / "install-git-hooks"
+
+UPPER, LOWER, DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz", "0123456789"
+
+
+def body(n, alphabet=UPPER + LOWER + DIGITS):
+    return "".join(alphabet[i % len(alphabet)] for i in range(n))
+
+
+GITHUB_TOKEN = "gh" + "p_" + body(36)
+OPENAI_TOKEN = "sk-" + "proj-" + body(74) + "T3Blbk" + "FJ" + body(74)
+PEM = "\n".join(["-" * 5 + "BEGIN RSA PRIV" + "ATE KEY" + "-" * 5, body(64), body(64), body(64),
+                 "-" * 5 + "END RSA PRIV" + "ATE KEY" + "-" * 5]) + "\n"
+EMAIL = "someone" + "@example.org"
+
+
+class Repo(unittest.TestCase):
+    personal = True
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.home = self.tmp / "home"
+        self.home.mkdir()
+        (self.home / ".gitconfig").write_text("")
+        self.env = dict(os.environ, HOME=str(self.home), GIT_CONFIG_GLOBAL=str(self.home / ".gitconfig"),
+                        GIT_CONFIG_NOSYSTEM="1", PYTHONDONTWRITEBYTECODE="1")
+        self.env.pop("GIT_DIR", None)
+        self.env.pop("GIT_INDEX_FILE", None)
+        self.repo = self.tmp / "repo"
+        self.remote = self.tmp / "remote.git"
+        self.git("init", "-q", "-b", "main", str(self.repo), cwd=self.tmp)
+        self.git("init", "-q", "--bare", str(self.remote), cwd=self.tmp)
+        self.git("config", "user.email", EMAIL)
+        self.git("config", "user.name", "T")
+        self.git("remote", "add", "origin", str(self.remote))
+        self.write("README.md", "hello\n")
+        self.git("add", "README.md")
+        self.git("commit", "-q", "-m", "init")
+        self.git("push", "-q", "origin", "main")
+        args = [sys.executable, str(INSTALLER)] + ([] if self.personal else ["--no-personal"]) + [str(self.repo)]
+        subprocess.run(args, check=True, capture_output=True, env=self.env)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def git(self, *args, cwd=None, check=True):
+        return subprocess.run(["git", *args], cwd=cwd or self.repo, env=self.env,
+                              capture_output=True, text=True, check=check)
+
+    def sh(self, command):
+        return subprocess.run(command, shell=True, cwd=self.repo, env=self.env, capture_output=True, text=True)
+
+    def write(self, name, text):
+        path = self.repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+
+class PreCommit(Repo):
+    def test_add_and_commit_in_one_command_is_rejected_and_masked(self):
+        self.write("s.txt", f"key: '{GITHUB_TOKEN}'\n")
+        result = self.sh("git add s.txt && git commit -m x")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("s.txt:1 github-pat ghp_", result.stderr)
+        self.assertNotIn(GITHUB_TOKEN, result.stderr + result.stdout)
+
+    def test_clean_commit_passes(self):
+        self.write("ok.txt", "nothing to see\n")
+        self.assertEqual(self.sh("git add ok.txt && git commit -q -m ok").returncode, 0)
+
+    def test_commit_all_scans_the_temporary_index(self):
+        self.write("README.md", f"hello {GITHUB_TOKEN}\n")
+        self.assertNotEqual(self.sh("git commit -a -m x").returncode, 0)
+
+    def test_binary_attribute_does_not_hide_content(self):
+        self.write(".gitattributes", "* -diff\n")
+        self.write("t.txt", OPENAI_TOKEN + "\n")
+        result = self.sh("git add .gitattributes t.txt && git commit -m x")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("openai-api-key", result.stderr)
+
+    def test_rename_to_a_key_file_name_is_rejected(self):
+        self.write("a.txt", "plain\n")
+        self.sh("git add a.txt && git commit -q -m a")
+        result = self.sh("git mv a.txt .env && git commit -m x")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(".env:0 file-name", result.stderr)
+
+    def test_private_key_in_an_ordinary_file_name(self):
+        self.write("notes.txt", PEM)
+        result = self.sh("git add notes.txt && git commit -m x")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("notes.txt:1 private-key-header", result.stderr)
+        self.assertNotIn(body(64), result.stderr)
+
+    def test_home_path_and_email_are_personal(self):
+        for text in (f"see {self.home}/x\n", f"mail {EMAIL}\n"):
+            with self.subTest(text=text.split()[0]):
+                self.write("p.txt", text)
+                result = self.sh("git add p.txt && git commit -m x")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("p.txt:1 personal ••••", result.stderr)
+                self.git("reset", "-q")
+
+    def test_missing_scanner_fails_closed(self):
+        hooks_dir = Path(self.git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()) / "hooks"
+        (hooks_dir / "secret_scan.py").unlink()
+        self.write("ok.txt", "fine\n")
+        result = self.sh("git add ok.txt && git commit -m ok")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("dev-harness", result.stderr)
+
+
+class PrePush(Repo):
+    def commit_skipping_hooks(self, name, text, message):
+        self.write(name, text)
+        self.git("add", name)
+        self.git("commit", "-q", "--no-verify", "-m", message)
+
+    def test_secret_added_then_removed_is_still_rejected(self):
+        self.commit_skipping_hooks("k.txt", OPENAI_TOKEN + "\n", "add")
+        self.commit_skipping_hooks("k.txt", "gone\n", "remove")
+        for command in ("git push origin main", "git push origin HEAD:refs/heads/other", "git push --all origin"):
+            with self.subTest(command=command):
+                result = self.sh(command)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("openai-api-key", result.stderr)
+
+    def test_private_key_committed_past_pre_commit_is_rejected_at_push(self):
+        self.commit_skipping_hooks("notes.txt", PEM, "pem")
+        result = self.sh("git push origin main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("private-key-header", result.stderr)
+
+    def test_clean_push_and_branch_delete_pass(self):
+        self.write("ok.txt", "fine\n")
+        self.sh("git add ok.txt && git commit -q -m ok")
+        self.assertEqual(self.sh("git push -q origin main:side").returncode, 0)
+        self.assertEqual(self.sh("git push -q origin :side").returncode, 0)
+
+
+class NoPersonal(Repo):
+    personal = False
+
+    def test_home_path_passes_but_tokens_do_not(self):
+        self.write("p.txt", f"path {self.home}/x\n")
+        self.assertEqual(self.sh("git add p.txt && git commit -q -m p").returncode, 0)
+        self.write("s.txt", GITHUB_TOKEN + "\n")
+        self.assertNotEqual(self.sh("git add s.txt && git commit -m s").returncode, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
