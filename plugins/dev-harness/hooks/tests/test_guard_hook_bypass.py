@@ -35,6 +35,12 @@ class Denied(unittest.TestCase):
         self.assert_denied(SKIP, f"git commit {SKIP} -m x", f"git push {SKIP}",
                            f"sh -c 'git commit {SKIP} -m x'", f"git merge {SKIP} side")
 
+    def test_abbreviated_or_quote_split_long_flag(self):
+        # git accepts any unique prefix of a long option, and the shell joins quoted pieces.
+        self.assert_denied(SKIP, f"git commit {SKIP[:-1]} -m x", f"git commit {SKIP[:-3]} -m x",
+                           f"git push {SKIP[:-2]} origin main", f"git commit '{SKIP[:-1]}''y' -m x",
+                           'git commit "--no-"verify -m x')
+
     def test_short_n_on_commit(self):
         self.assert_denied("-n", "git commit -n -m x", "git commit -nm x", "git commit -m x -n",
                            "git -C repo commit -an")
@@ -50,7 +56,8 @@ class Denied(unittest.TestCase):
 
 class Allowed(unittest.TestCase):
     def test_ordinary_commands(self):
-        for command in ('git commit -m "no verify"', "git commit -mnope", "git commit -m -n",
+        for command in ('git commit -m "no verify"', "git commit --no-edit", "git log --no-walk",
+                        "git fetch --no-verbose", "git commit -mnope", "git commit -m -n",
                         "git log -n 3", "git commit -F notes.txt", "echo hello", ""):
             with self.subTest(command=command):
                 self.assertIsNone(decide(command))

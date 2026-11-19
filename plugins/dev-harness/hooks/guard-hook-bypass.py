@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """PreToolUse(Bash): refuse git commands that would skip the native pre-commit / pre-push hooks.
 
-Blocked when the raw command mentions `git` and any of: the long skip-verify flag, a
+Blocked when the raw command mentions `git` and any of: the long skip-verify flag or any
+prefix git would expand to it (quotes removed first, so split spellings are joined), a
 `core.hooksPath` override, or `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT` injection. The raw
 text is checked, so `sh -c '...'` wrappers are caught too. `git commit -n` (alone or in a short
 flag cluster) is judged per segment, so `git commit -m -n` and `git log -n 3` pass.
@@ -15,8 +16,11 @@ from lib.shell_text import command_segments
 
 PREFIX = "Blocked by dev-harness/guard-hook-bypass:"
 SKIP_FLAG = "--no-" + "verify"
+# git takes any unique prefix of a long option, so `--no-v` … the full flag all count.
+_SKIP_PREFIXES = "".join(f"(?:{re.escape(c)}" for c in SKIP_FLAG[len("--no-v"):]) + ")?" * (
+    len(SKIP_FLAG) - len("--no-v"))
 RAW_MARKERS = (
-    (re.compile(re.escape(SKIP_FLAG)), SKIP_FLAG),
+    (re.compile(re.escape("--no-v") + _SKIP_PREFIXES + r"(?![\w-])"), SKIP_FLAG),
     (re.compile(r"(?i)core\.hookspath"), "core.hooksPath"),
     (re.compile(r"\bGIT_CONFIG_PARAMETERS\b"), "GIT_CONFIG_PARAMETERS"),
     (re.compile(r"\bGIT_CONFIG_COUNT\b"), "GIT_CONFIG_COUNT"),
@@ -60,8 +64,10 @@ def commit_skips_hooks(rest: list) -> bool:
 def violation(cmd: str):
     if "git" not in cmd:
         return None
+    # The shell joins `'--no-'"verify"` into one word; judge the text with quotes taken out.
+    joined = re.sub(r"""['"\\]""", "", cmd)
     for pattern, naming in RAW_MARKERS:
-        if pattern.search(cmd):
+        if pattern.search(joined):
             return reason(naming)
     for words in command_segments(cmd):
         if words[0].rsplit("/", 1)[-1] != "git":
