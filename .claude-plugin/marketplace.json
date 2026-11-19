@@ -50,6 +50,11 @@
       "name": "messenger-bubbles",
       "source": "./plugins/messenger-bubbles",
       "description": "Messenger-style transcript: your prompts right-aligned, Claude's replies left-aligned, both in bubbles."
+    },
+    {
+      "name": "dev-harness",
+      "source": "./plugins/dev-harness",
+      "description": "Developer harness: role agents, plan-structure gate, git-discipline guards and a secret scanner with native git hooks."
     }
   ]
 }
