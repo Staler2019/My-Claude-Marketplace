@@ -3,6 +3,7 @@
 Tokens and personal values are built at run time; HOME and the global git config are pointed
 at the temp dir so the personal rules see injected values only.
 """
+import hashlib
 import os
 import shutil
 import subprocess
@@ -334,6 +335,118 @@ class PrePush(Repo):
         self.sh("git add ok.txt && git commit -q -m ok")
         self.assertEqual(self.sh("git push -q origin main:side").returncode, 0)
         self.assertEqual(self.sh("git push -q origin :side").returncode, 0)
+
+
+PLACEHOLDER = "api" + "Key = 'sk-live-xxxx'"
+ALLOW = ".dev-harness-" + "allow"
+
+
+def fingerprint(path, kind, text):
+    return hashlib.sha256(f"{path}\0{kind}\0{text}".encode()).hexdigest()[:16]
+
+
+class AllowList(Repo):
+    def listing(self, *entries):
+        return "# reviewed by the user\n" + "".join(f"{fp}  {note}\n" for fp, note in entries)
+
+    def placeholder_entry(self, path="a.md", text=PLACEHOLDER):
+        return fingerprint(path, "generic-secret", text), f"{path}:1 generic-secret"
+
+    def commit_skipping_hooks(self, *names, message="m"):
+        self.git("add", *names)
+        self.git("commit", "-q", "--no-" + "verify", "-m", message)
+
+    def test_listed_line_commits_and_pushes_with_a_notice(self):
+        self.write("a.md", PLACEHOLDER + "\n")
+        self.write(ALLOW, self.listing(self.placeholder_entry()))
+        result = self.sh(f"git add a.md {ALLOW} && git commit -q -m a")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("allowed by " + ALLOW + ": a.md:1 generic-secret", result.stderr)
+        result = self.sh("git push -q origin main")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("allowed by " + ALLOW, result.stderr)
+
+    def test_refusal_prints_the_fingerprint_and_how_to_list_it(self):
+        self.write("a.md", PLACEHOLDER + "\n")
+        result = self.sh("git add a.md && git commit -q -m a")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("fp:" + self.placeholder_entry()[0], result.stderr)
+        self.assertIn(ALLOW, result.stderr)
+
+    def test_entry_only_in_the_work_tree_does_not_allow(self):
+        self.write("a.md", PLACEHOLDER + "\n")
+        self.write(ALLOW, self.listing(self.placeholder_entry()))
+        self.assertNotEqual(self.sh("git add a.md && git commit -q -m a").returncode, 0)
+
+    def test_commit_all_reads_the_allow_file_it_commits(self):
+        self.write("a.md", "x\n")
+        self.write(ALLOW, self.listing())
+        self.git("add", "a.md", ALLOW)
+        self.git("commit", "-q", "-m", "base")
+        self.write("a.md", PLACEHOLDER + "\n")
+        self.write(ALLOW, self.listing(self.placeholder_entry()))
+        result = self.sh("git commit -q -a -m all")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_commit_of_one_path_ignores_an_entry_outside_it(self):
+        self.write("a.md", "x\n")
+        self.write(ALLOW, self.listing())
+        self.git("add", "a.md", ALLOW)
+        self.git("commit", "-q", "-m", "base")
+        self.write("a.md", PLACEHOLDER + "\n")
+        self.write(ALLOW, self.listing(self.placeholder_entry()))
+        self.git("add", ALLOW)
+        self.assertNotEqual(self.sh("git commit -q -m only a.md").returncode, 0)
+
+    def test_changed_line_is_reported_again(self):
+        self.write("a.md", PLACEHOLDER + " # edited\n")
+        self.write(ALLOW, self.listing(self.placeholder_entry()))
+        self.assertNotEqual(self.sh(f"git add a.md {ALLOW} && git commit -q -m a").returncode, 0)
+
+    def test_personal_and_file_name_findings_cannot_be_listed(self):
+        home_line = f"path {self.home}/x"
+        self.write("p.txt", home_line + "\n")
+        self.write(".env", "x\n")
+        self.write(ALLOW, self.listing((fingerprint("p.txt", "personal", home_line), "p.txt:1 personal"),
+                                       (fingerprint(".env", "file-name", ""), ".env file-name")))
+        result = self.sh(f"git add p.txt .env {ALLOW} && git commit -q -m p")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("p.txt:1 personal", result.stderr)
+        self.assertIn(".env:0 file-name", result.stderr)
+
+    def test_allow_path_that_is_not_a_regular_file_fails_closed(self):
+        fp = self.placeholder_entry()[0]
+        self.write("a.md", PLACEHOLDER + "\n")
+        self.write(f"{ALLOW}/{fp}", "x\n")
+        self.assertNotEqual(self.sh(f"git add a.md {ALLOW} && git commit -q -m dir").returncode, 0)
+        self.git("rm", "-q", "-r", "--cached", ALLOW)
+        shutil.rmtree(self.repo / ALLOW)
+        self.write("list.txt", self.listing(self.placeholder_entry()))
+        os.symlink("list.txt", self.repo / ALLOW)
+        result = self.sh(f"git add list.txt {ALLOW} && git commit -q -m link")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refusing", result.stderr)
+
+    def test_push_judges_each_commit_by_its_own_tree(self):
+        self.write("a.md", PLACEHOLDER + "\n")
+        self.commit_skipping_hooks("a.md", message="secret first")
+        self.write(ALLOW, self.listing(self.placeholder_entry()))
+        self.commit_skipping_hooks(ALLOW, message="entry later")
+        result = self.sh("git push -q origin main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("a.md:1 generic-secret", result.stderr)
+
+    def test_message_findings_are_never_allowed(self):
+        self.write("message", PLACEHOLDER + "\n")
+        self.write(ALLOW, self.listing(self.placeholder_entry("message"),
+                                       self.placeholder_entry("commit-msg")))
+        result = self.sh(f"git add message {ALLOW} && git commit -q -m \"{PLACEHOLDER}\"")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("commit-msg:1 generic-secret", result.stderr)
+        self.git("commit", "-q", "--no-" + "verify", "-m", PLACEHOLDER)
+        result = self.sh("git push -q origin main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("message:1 generic-secret", result.stderr)
 
 
 class NoreplyEmail(Repo):

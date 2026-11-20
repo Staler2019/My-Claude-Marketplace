@@ -47,6 +47,27 @@ Findings are printed masked (`ghp_••••`, `personal ••••`). `pre-
 remote does not hold (asked with `git ls-remote`), so a secret added and later removed is still
 caught. Any scanner or git error refuses the commit or push.
 
+### Allow list
+
+A token or generic finding on an added line is printed with a fingerprint (`fp:<16 hex>`, a
+hash of path, rule and the whole line). When it is a false positive — test data, a placeholder
+in documentation — open the line, then list it in `.dev-harness-allow` at the repo root and
+commit that file with the line:
+
+```
+# <fp>  <path>:<line> <kind>
+0123456789abcdef  docs/example.md:12 generic-secret
+```
+
+`pre-commit` reads the list from the index (what is being committed) and `pre-push` from each
+pushed commit's own tree, so an entry added in a later commit does not clear an earlier one.
+Editing the line or moving the file changes its fingerprint, and it is reported again. Every
+finding let through is printed as `allowed by .dev-harness-allow: …`. Personal and file-name
+findings, commit messages and tag messages carry no fingerprint and cannot be listed. A
+`.dev-harness-allow` that is not a regular file (a directory, a symlink) refuses the commit.
+The list is committed, so its fingerprints, paths and kinds are as public as the repo: list
+only lines committed with their entry.
+
 ## Limits
 
 `guard-hook-bypass` is a best-effort check of command text, not a gate: shell grammar is too

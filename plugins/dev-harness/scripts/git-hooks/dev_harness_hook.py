@@ -18,6 +18,8 @@ EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 ZERO = "0" * 40
 PATTERNS_FILE = "~/.config/dev-harness/personal-patterns.txt"
 SCISSORS = "# ------------------------ >8 ------------------------"
+ALLOW_FILE = ".dev-harness-allow"
+BLOB_MODES = ("100644", "100755")
 
 
 def _scanner():
@@ -60,10 +62,28 @@ def _personal(scan) -> Sequence[str]:
     return scan.personal_literals(os.path.expanduser("~"), emails, patterns)
 
 
-def _commit_findings(scan, personal) -> List:
+def _allow_list(scan, entries: str) -> frozenset:
+    """The allow list from `ls-files -s` / `ls-tree` output for ALLOW_FILE: absent → empty; a
+    regular blob → its entries; anything else (a directory, a symlink) → error, refusing."""
+    rows = [line for line in entries.splitlines() if line.strip()]
+    if not rows:
+        return frozenset()
+    meta, _, path = rows[0].partition("\t")
+    fields = meta.split()
+    if len(rows) != 1 or path != ALLOW_FILE or fields[0] not in BLOB_MODES:
+        raise RuntimeError(f"{ALLOW_FILE} is not a regular file")
+    # `ls-tree`: <mode> blob <oid>; `ls-files -s`: <mode> <oid> <stage>.
+    oid = fields[2] if fields[1] == "blob" else fields[1]
+    return scan.parse_allow(_git("cat-file", "blob", oid))
+
+
+def _commit_findings(scan, personal, allowed: List) -> List:
     names = [n for n in _git("diff", "--cached", *NAME_FLAGS).split("\0") if n]
     patch = _git("diff", "--cached", *DIFF_FLAGS)
-    return scan.scan_names(names) + scan.scan_lines(scan.added_lines(patch), personal)
+    allow = _allow_list(scan, _git("ls-files", "-s", "--", ALLOW_FILE))
+    kept, passed = scan.split_allowed(scan.scan_lines(scan.added_lines(patch), personal, fingerprint=True), allow)
+    allowed.extend(str(finding) for finding in passed)
+    return scan.scan_names(names) + kept
 
 
 def _verbose_diff_lines() -> set:
@@ -100,7 +120,7 @@ def _tag_message(sha: str) -> str:
     return _git("cat-file", "tag", sha).split("\n\n", 1)[-1]
 
 
-def _push_findings(scan, personal, remote: str, updates: str) -> List:
+def _push_findings(scan, personal, remote: str, updates: str, allowed: List) -> List:
     findings, exclude = [], None
     for line in updates.splitlines():
         fields = line.split()
@@ -111,11 +131,16 @@ def _push_findings(scan, personal, remote: str, updates: str) -> List:
         if exclude is None:
             exclude = _remote_commits(remote)
         for commit in _git("rev-list", fields[1], "--stdin", stdin=exclude).split():
+            # Each commit is judged by the allow list in its own tree, never a later one.
+            allow = _allow_list(scan, _git("ls-tree", commit, "--", ALLOW_FILE))
             parents = _git("rev-list", "--parents", "-n", "1", commit).split()[1:] or [EMPTY_TREE]
             for parent in parents:
                 names = [n for n in _git("diff-tree", "-r", *NAME_FLAGS, parent, commit).split("\0") if n]
                 patch = _git("diff-tree", "-r", "-p", *DIFF_FLAGS, parent, commit)
-                for finding in scan.scan_names(names) + scan.scan_lines(scan.added_lines(patch), personal):
+                kept, passed = scan.split_allowed(
+                    scan.scan_lines(scan.added_lines(patch), personal, fingerprint=True), allow)
+                allowed.extend(f"{commit[:8]} {finding}" for finding in passed)
+                for finding in scan.scan_names(names) + kept:
                     findings.append(f"{commit[:8]} {finding}")
             message = _git("log", "-1", "--format=%B", commit)
             for finding in scan.scan_text("message", message, personal):
@@ -133,23 +158,30 @@ def _say(text: str) -> None:
 
 
 def main(mode: str) -> int:
+    allowed: List[str] = []
     try:
         scan = _scanner()
         personal = _personal(scan)
         if mode == "commit":
-            findings = _commit_findings(scan, personal)
+            findings = _commit_findings(scan, personal, allowed)
         elif mode == "message":
             findings = _message_findings(scan, personal, sys.argv[1])
         else:
             # argv: remote name, remote URL; the URL also works for a push to a bare URL.
             remote = sys.argv[2] if len(sys.argv) > 2 else sys.argv[1]
-            findings = _push_findings(scan, personal, remote, sys.stdin.read())
+            findings = _push_findings(scan, personal, remote, sys.stdin.read(), allowed)
     except Exception as error:  # fail closed on anything, including a missing scanner
         _say(f"dev-harness {mode} guard failed ({type(error).__name__}: {error}); refusing.")
         return 1
+    for finding in allowed:
+        _say(f"dev-harness: allowed by {ALLOW_FILE}: {finding}")
     if not findings:
         return 0
     _say(f"dev-harness: {mode} refused, {len(findings)} finding(s):")
     for finding in findings:
         _say(f"  {finding}")
+    if any(" fp:" in finding for finding in map(str, findings)):
+        _say(f"dev-harness: open each path:line first. A false positive (test data, placeholder) can be "
+             f"listed by the user as `<fp>  <path>:<line> <kind>` in {ALLOW_FILE}, committed with that line; "
+             "personal and file-name findings cannot be listed.")
     return 1
