@@ -37,6 +37,7 @@ cannot catch a skipped run either; a server-side scan (e.g. GitHub push protecti
 backstop.
 """
 import json
+import os
 import re
 import sys
 
@@ -44,6 +45,7 @@ from lib.shell_text import split_on_operators, tokens
 
 PREFIX = "Blocked by dev-harness/guard-hook-bypass:"
 SKIP_FLAG = "--no-" + "verify"
+ALLOW_FILE = ".dev-harness-allow"
 HOOKS_PATH = re.compile(r"(?i)core\.hookspath")
 ALIAS = re.compile(r"(?i)\balias\.")
 ENV_INJECTION = re.compile(r"\bGIT_CONFIG_(PARAMETERS|COUNT|GLOBAL|SYSTEM)\b")
@@ -65,6 +67,18 @@ SKIP_GLUED = re.compile(r"--no-veri(?:f(?:y)?)?(?:\d*[<>].*)?", re.S)
 def reason(naming: str) -> str:
     return (f"{PREFIX} `{naming}` would skip the dev-harness git hooks (secret scan). "
             "Fix what the hook reports instead of bypassing it.")
+
+
+def allow_file_reason() -> str:
+    return (f"{PREFIX} `{ALLOW_FILE}` is the user's allow list for the git hooks; only the user "
+            "edits it (e.g. `! cp ...`). Show them the `fp:` lines to list instead.")
+
+
+def names_allow_file(path: str) -> bool:
+    """The basename of the path, or of what it resolves to, is the allow file in any letter case
+    (macOS file systems ignore case)."""
+    return any(os.path.basename(p.rstrip("/")).casefold() == ALLOW_FILE
+               for p in (path, os.path.realpath(path)) if p)
 
 
 def commit_with_short_n(words: list) -> bool:
@@ -188,6 +202,9 @@ def judge(cmd: str):
     text = normalized(cmd)
     flat = re.sub(r"['\"\\]", "", text)
     view = unquoted_view(text)
+    # Before the git check: writing the allow list needs no git command.
+    if ALLOW_FILE in flat.casefold():
+        return allow_file_reason()
     involves_git = "git" in flat
     if _EXPANDING.search(view) and (involves_git or spells_git_by_braces(view)):
         return reason("brace expansion")
@@ -221,10 +238,12 @@ def judge(cmd: str):
 
 def main() -> None:
     try:
-        cmd = json.load(sys.stdin.buffer).get("tool_input", {}).get("command", "")
+        tool_input = json.load(sys.stdin.buffer).get("tool_input", {})
+        cmd = tool_input.get("command", "")
+        path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
     except (ValueError, AttributeError):
         return
-    found = judge(cmd or "")
+    found = allow_file_reason() if path and names_allow_file(path) else judge(cmd or "")
     if found:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                                  "permissionDecision": "deny",

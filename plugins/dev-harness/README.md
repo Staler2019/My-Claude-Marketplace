@@ -82,6 +82,13 @@ command substitution, `$'\x..'` escapes, globbing, aliases, scripts) is out of i
 skipped local hook cannot be caught locally: enable a server-side scan such as GitHub push
 protection as the last line.
 
+The guard also keeps Claude from writing `.dev-harness-allow`: Write, Edit, MultiEdit and
+NotebookEdit of that name (any letter case, also through a symlink) and any Bash command naming
+it are denied, so only the user lists entries. It cannot see the file arrive by other routes —
+`git apply` / `git am` / `patch`, `cp -r` or `tar x` of a directory holding it, checkout,
+restore, merge, cherry-pick or stash of a branch carrying entries, or a clean filter. The
+`allowed by .dev-harness-allow` notice and review of the committed list cover those.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

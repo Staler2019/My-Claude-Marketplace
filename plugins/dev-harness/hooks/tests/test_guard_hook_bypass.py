@@ -149,7 +149,61 @@ class Allowed(unittest.TestCase):
         self.assertIsNone(decide(f"echo {SKIP}"))
 
 
+ALLOW = ".dev-harness-" + "allow"
+
+
+def decide_tool(tool_name, tool_input):
+    proc = subprocess.run([sys.executable, str(HOOK)],
+                          input=json.dumps({"tool_name": tool_name, "tool_input": tool_input}),
+                          text=True, capture_output=True, timeout=10)
+    assert proc.returncode == 0, proc.stderr
+    if not proc.stdout.strip():
+        return None
+    return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
+
+
+class AllowFile(unittest.TestCase):
+    def test_file_tools_cannot_write_the_allow_file_in_any_case(self):
+        for tool, key in (("Write", "file_path"), ("Edit", "file_path"), ("MultiEdit", "file_path"),
+                          ("NotebookEdit", "notebook_path")):
+            for path in (f"/r/{ALLOW}", "/r/.Dev-Harness-Allow", "/r/" + ALLOW.upper()):
+                with self.subTest(tool=tool, path=path):
+                    self.assertEqual(decide_tool(tool, {key: path}), "deny")
+
+    def test_file_tools_cannot_write_through_a_symlink(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / ALLOW
+            target.write_text("")
+            os.symlink(target, Path(tmp) / "link")
+            self.assertEqual(decide_tool("Write", {"file_path": str(Path(tmp) / "link")}), "deny")
+
+    def test_bash_naming_the_allow_file_in_any_spelling(self):
+        for command in (f"echo ab >> {ALLOW}", "echo a >> " + ALLOW.upper(), f"cp a {ALLOW}",
+                        f"cat {ALLOW}", f"sh -c 'echo a > {ALLOW}'", "echo a >> .dev-harness-al''low",
+                        'cp a ".Dev-Harness-"allow', "echo a > .dev-harness\\-allow"):
+            with self.subTest(command=command):
+                decision, reason = decide(command)
+                self.assertEqual(decision, "deny")
+                self.assertIn(ALLOW, reason)
+
+    def test_other_files_and_commands_pass(self):
+        self.assertIsNone(decide_tool("Write", {"file_path": "/r/allow.txt"}))
+        self.assertIsNone(decide_tool("Write", {"file_path": "/r/x/"}))
+        self.assertIsNone(decide_tool("Edit", {"file_path": "/r/notes.md"}))
+        self.assertIsNone(decide("git status"))
+
+
 class Registration(unittest.TestCase):
+    def test_file_tools_run_the_guard_and_block_on_failure(self):
+        config = json.loads((HOOKS / "hooks.json").read_text())
+        groups = [g for g in config["hooks"]["PreToolUse"]
+                  if any("guard-hook-bypass.py" in h["command"] for h in g["hooks"]) and g["matcher"] != "Bash"]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(set(groups[0]["matcher"].split("|")), {"Write", "Edit", "MultiEdit", "NotebookEdit"})
+        (entry,) = [h for h in groups[0]["hooks"] if "guard-hook-bypass.py" in h["command"]]
+        self.assertEqual(entry.get("onFailure"), "block")
+
     def test_hooks_json_blocks_when_the_guard_itself_fails(self):
         config = json.loads((HOOKS / "hooks.json").read_text())
         entries = [h for group in config["hooks"]["PreToolUse"] if group.get("matcher") == "Bash"
