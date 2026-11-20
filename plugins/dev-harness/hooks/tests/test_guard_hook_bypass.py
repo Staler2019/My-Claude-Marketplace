@@ -59,17 +59,26 @@ class Denied(unittest.TestCase):
     def test_short_n_on_commit(self):
         self.assert_denied("-n", "git commit -n -m x", "git commit -nm x", "git commit -m x -n",
                            "git -C repo commit -an", "git commit -m x -\\\nn",
-                           "git --attr-source HEAD commit -n -m x", "git --config-env a=B commit -n")
+                           "git --attr-source HEAD commit -n -m x", "git --config-env a=B commit -n",
+                           "{ git commit -n; }", "if git commit -n -m y; then :; fi", "! git commit -n",
+                           "for i in 1; do git commit -n -m x; done", "until git commit -n; do :; done",
+                           ">/dev/null git commit -n", "2>/dev/null git commit -n", "nice git commit -n",
+                           "timeout 5 git commit -n", "xargs git commit -n", 'echo "<<EOF"\ngit commit -n -m x\nEOF',
+                           "bash <<EOF\ngit commit -n -m x\nEOF")
 
     def test_hooks_path_override_any_spelling(self):
         self.assert_denied("core.hooksPath", 'sh -c "git -c core.hooksPath=/dev/null commit"',
                            "git -c core.hookspath= push", "git config core.hooksPath /tmp/x",
                            "git -ccore.hooksPath=/dev/null commit", "git --config-env=core.hooksPath=V commit",
-                           "git -c core.hooks'Path'= push")
+                           "git -c core.hooks'Path'= push", "{ git -c core.hooksPath=/dev/null push origin main; }",
+                           "! git -c core.hooksPath=/dev/null push", "2>/dev/null git -c core.hooksPath=/dev/null push",
+                           "echo '<<X'\ngit -c core.hooksPath=/dev/null push\nX", "! git config core.hooksPath /dev/null")
 
     def test_config_injection_through_environment(self):
         self.assert_denied("GIT_CONFIG_COUNT", "GIT_CONFIG_COUNT=1 git commit -m x")
         self.assert_denied("GIT_CONFIG_PARAMETERS", "GIT_CONFIG_PARAMETERS=x git push")
+        self.assert_denied("GIT_CONFIG_GLOBAL", "GIT_CONFIG_GLOBAL=/tmp/c git commit -m x")
+        self.assert_denied("GIT_CONFIG_SYSTEM", "GIT_CONFIG_SYSTEM=/tmp/c git push")
 
 
 class Allowed(unittest.TestCase):
@@ -79,7 +88,8 @@ class Allowed(unittest.TestCase):
                         "git log --format=%H,%s", 'git commit -m "{a,b} $HOME"', "git commit -mnope",
                         "git commit -m -n", "git log -n 3", "git commit -F notes.txt", "echo hello", "",
                         f'git commit -m "docs: never pass {SKIP}"', "git add src/a.py src/b.py",
-                        "git log --format='{%H,%s}'"):
+                        "git log --format='{%H,%s}'", "grep -n git notes.txt", "git push -n", "echo core.hooksPath; git status",
+                        "cat <<EOF > notes.txt\nplain text\nEOF\ngit add notes.txt"):
             with self.subTest(command=command):
                 self.assertIsNone(decide(command))
 

@@ -9,10 +9,14 @@ involves git:
     assemble a flag or the word `git` itself from braces, so paths are listed one by one;
   - a word that is the skip-verify long flag or an abbreviation git accepts for it
     (`--no-veri` and longer; shorter prefixes are ambiguous to git and rejected by it);
-  - a word naming `core.hooksPath` (`-c`, `-c<value>`, `--config-env`, `git config`);
-  - `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT` anywhere in the text;
+  - a word naming `core.hooksPath` (`-c`, `-c<value>`, `--config-env`, `git config`) in a
+    segment that runs git;
+  - `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT` / `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM`
+    anywhere in the text;
   - `git commit -n`, alone or in a short flag cluster.
-A word holding a whole command line (`sh -c '…'`, `eval "…"`) that mentions git is judged as a
+A segment runs git when any of its words is `git`, wherever it stands: after `{`, `!`, `if`,
+`do`, a redirection, or a runner such as `nice`, `timeout` or `xargs`. Heredoc bodies are judged
+as command lines too, since `bash <<EOF` runs them. A word holding a whole command line (`sh -c '…'`, `eval "…"`) that mentions git is judged as a
 command of its own; message text that does not mention git is not, so `-m "never pass <flag>"`
 passes. Registered with "onFailure": "block": a crash or timeout of this guard denies the
 command.
@@ -27,7 +31,7 @@ import json
 import re
 import sys
 
-from lib.shell_text import command_segments
+from lib.shell_text import split_on_operators, tokens
 
 PREFIX = "Blocked by dev-harness/guard-hook-bypass:"
 SKIP_FLAG = "--no-" + "verify"
@@ -35,7 +39,7 @@ SKIP_FLAG = "--no-" + "verify"
 # ambiguous with `--no-verbose`, so `--no-veri`, `--no-verif` and the full flag count.
 SKIP_WORD = re.compile(r"--no-veri(?:f(?:y)?)?")
 HOOKS_PATH = re.compile(r"(?i)core\.hookspath")
-ENV_INJECTION = re.compile(r"\bGIT_CONFIG_(PARAMETERS|COUNT)\b")
+ENV_INJECTION = re.compile(r"\bGIT_CONFIG_(PARAMETERS|COUNT|GLOBAL|SYSTEM)\b")
 # One brace group with a comma or a `..` range and no group inside it.
 _BRACE = re.compile(r"\{([^{}]*)\}")
 _EXPANDING = re.compile(r"\{[^{}]*(?:,|\.\.)[^{}]*\}")
@@ -155,6 +159,26 @@ def spells_git_by_braces(view: str) -> bool:
     return False
 
 
+def segments(text: str):
+    """Shell words split at operators and newlines, heredoc bodies included; with an unbalanced
+    quote each line is split on its own."""
+    try:
+        groups = [tokens(text)]
+    except ValueError:
+        groups = []
+        for line in text.splitlines():
+            try:
+                groups.append(tokens(line))
+            except ValueError:
+                groups.append(line.split())
+    for group in groups:
+        yield from (words for words in split_on_operators(group) if words)
+
+
+def is_git(word: str) -> bool:
+    return word.rsplit("/", 1)[-1] == "git"
+
+
 def judge(cmd: str, depth: int = 0):
     text = normalized(cmd)
     flat = re.sub(r"['\"\\]", "", text)
@@ -167,20 +191,22 @@ def judge(cmd: str, depth: int = 0):
     found = ENV_INJECTION.search(flat)
     if found:
         return reason(found.group(0))
-    for words in command_segments(text):
+    for words in segments(text):
+        runs_git = any(is_git(word) for word in words)
         for word in words:
             if SKIP_WORD.fullmatch(word):
                 return reason(SKIP_FLAG)
-            if HOOKS_PATH.search(word) and words[0].rsplit("/", 1)[-1] == "git":
+            if HOOKS_PATH.search(word) and runs_git:
                 return reason("core.hooksPath")
             if depth < MAX_DEPTH and "git" in word and re.search(r"[\s;&|]", word):
                 nested = judge(word, depth + 1)
                 if nested:
                     return nested
-        if words[0].rsplit("/", 1)[-1] == "git":
-            args = git_subcommand(words[1:])
-            if args and args[0] == "commit" and commit_skips_hooks(args[1:]):
-                return reason("-n")
+        for i, word in enumerate(words):
+            if is_git(word):
+                args = git_subcommand(words[i + 1:])
+                if args and args[0] == "commit" and commit_skips_hooks(args[1:]):
+                    return reason("-n")
     return None
 
 
