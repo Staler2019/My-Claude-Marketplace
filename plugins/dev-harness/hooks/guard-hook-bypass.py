@@ -9,13 +9,14 @@ involves git:
     assemble a flag or the word `git` itself from braces, so paths are listed one by one;
   - a word that is the skip-verify long flag or an abbreviation git accepts for it
     (`--no-veri` and longer; shorter prefixes are ambiguous to git and rejected by it);
-  - a word naming `core.hooksPath` (`-c`, `-c<value>`, `--config-env`, `git config`) in a
-    segment that mentions git;
+  - `core.hooksPath` anywhere in the text (`-c`, `--config-env`, `git config`, and also an
+    `echo` beside a git command);
   - `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT` / `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM`
     anywhere in the text;
-  - conservatively, any single-dash word holding an `n` after a word naming `commit` in the same
-    segment (`git commit -n`, `-an`, `alias.ci=commit ci -n`, and also `-m -n`): options are
-    not parsed, so no redirection or shell-grammar position can hide the flag.
+  - conservatively, any single-dash word holding an `n` anywhere after a word naming `commit`
+    (`git commit -n`, `-an`, `git-commit -n`, `alias.ci=commit ci -n`, and also `-m -n` or
+    `commit -m x && git log -n 1`): options are not parsed and the command is not split, so no
+    redirection, quoting or shell-grammar position can hide the flag.
 A word glued to a redirection (`--no-verify>/dev/null`, `-n>/dev/null`) still counts. Unquoted
 `2>&1`, `&>`, `>|` are blanked first so they do not cut a segment. Heredoc and here-string
 bodies are judged as command lines too, since `bash <<EOF` / `bash <<<"…"` run them. A word
@@ -45,10 +46,9 @@ _BRACE = re.compile(r"\{([^{}]*)\}")
 _EXPANDING = re.compile(r"\{[^{}]*(?:,|\.\.)[^{}]*\}")
 _SEQUENCE = re.compile(r"^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])(?:\.\.(-?\d+))?$")
 MAX_VARIANTS = 256
-MAX_DEPTH = 4
 # Conservative `-n` rule, no option parsing: after a word naming `commit` (also inside
 # `alias.x=commit` or glued to a redirection), any single-dash word whose letters hold an `n`.
-COMMIT_WORD = re.compile(r"(?<![\w-])commit(?![\w-])")
+COMMIT_WORD = re.compile(r"(?<![\w-])(?:git-)?commit(?![\w-])")
 SHORT_WITH_N = re.compile(r"-[^-\s][^\s]*")
 # git takes a unique prefix of a long option; `--no-veri` is the shortest one that is not
 # ambiguous with `--no-verbose`, so `--no-veri`, `--no-verif` and the full flag count, also
@@ -177,7 +177,7 @@ def segments(text: str):
         yield from (words for words in split_on_operators(group) if words)
 
 
-def judge(cmd: str, depth: int = 0):
+def judge(cmd: str):
     text = normalized(cmd)
     flat = re.sub(r"['\"\\]", "", text)
     view = unquoted_view(text)
@@ -189,19 +189,22 @@ def judge(cmd: str, depth: int = 0):
     found = ENV_INJECTION.search(flat)
     if found:
         return reason(found.group(0))
+    # Judged over the whole command, never per segment: the guard cannot then split apart what
+    # the shell keeps together (quoted operators, multi-line quotes, nesting at any depth).
+    if HOOKS_PATH.search(flat):
+        return reason("core.hooksPath")
+    if commit_with_short_n(flat.split()):
+        return reason("-n")
     for words in segments(text):
-        mentions_git = any("git" in word for word in words)
         for word in words:
             if SKIP_GLUED.fullmatch(word):
                 return reason(SKIP_FLAG)
-            if HOOKS_PATH.search(word) and mentions_git:
-                return reason("core.hooksPath")
-            if depth < MAX_DEPTH and "git" in word and re.search(r"[\s;&|]", word):
-                nested = judge(word, depth + 1)
+            # Each nested word is shorter than its command, so this ends; a recursion error
+            # crashes the guard, which denies.
+            if "git" in word and re.search(r"[\s;&|]", word):
+                nested = judge(word)
                 if nested:
                     return nested
-        if commit_with_short_n(words):
-            return reason("-n")
     return None
 
 

@@ -1,6 +1,7 @@
 """Tests for guard-hook-bypass.py: stdin JSON in, a deny decision (or nothing) out."""
 import json
 import os
+import shlex
 import subprocess
 import sys
 import unittest
@@ -79,6 +80,28 @@ class Denied(unittest.TestCase):
         # Conservative: no option parsing, so a message such as `-m -n` is refused too.
         self.assert_denied("-n", "git commit -m -n", "git commit -mnope", 'git commit -m "-n"')
 
+    def test_n_rule_spans_the_whole_command(self):
+        # The guard does not split commands for this rule, so nothing the shell keeps together
+        # can be split apart: quoted operators, multi-line messages, deep nesting.
+        deep = "git commit -m x -n"
+        for _ in range(6):
+            deep = "sh -c " + shlex.quote(deep)
+        self.assert_denied("-n", "git commit -m ';' -n", 'git commit -m ")" -n', 'git commit -m "(" -n',
+                           'git commit -m "|" -n', 'git commit -m "&" -n', "git commit -m \\; -n",
+                           'git commit -m "\n;" -n', "git commit -m \"subject\nbody\" -n\n# it's done",
+                           "git commit -m \"subject\nbody\" -n; echo $'don\\'t'", deep,
+                           "/usr/libexec/git-core/git-commit -n -m x")
+
+    def test_hooks_path_anywhere_in_a_git_command(self):
+        self.assert_denied("core.hooksPath", "git -c ';' -c core.hooksPath=/dev/null commit -m x",
+                           "echo core.hooksPath; git status")
+
+    def test_long_flag_at_any_nesting_depth(self):
+        deep = f"git commit {SKIP} -m x"
+        for _ in range(6):
+            deep = "sh -c " + shlex.quote(deep)
+        self.assert_denied(SKIP, deep)
+
     def test_long_flag_glued_to_a_redirection(self):
         self.assert_denied(SKIP, f"git commit {SKIP}>/dev/null -m x", f"git push {SKIP[:-1]}2>&1")
 
@@ -106,7 +129,7 @@ class Allowed(unittest.TestCase):
                         "git fetch --no-verbose", "git merge --no-verify-signatures main",
                         "git log --format=%H,%s", 'git commit -m "{a,b} $HOME"', "git log -n 3", "git commit -F notes.txt", "echo hello", "",
                         f'git commit -m "docs: never pass {SKIP}"', "git add src/a.py src/b.py",
-                        "git log --format='{%H,%s}'", "grep -n git notes.txt", "git push -n", "echo core.hooksPath; git status", "git log -n 3 2>&1 | head", "git status >out.txt 2>&1",
+                        "git log --format='{%H,%s}'", "grep -n git notes.txt", "git push -n", "git log -n 3 2>&1 | head", "git status >out.txt 2>&1",
                         'git commit -m "a -> b" -F notes.txt', "git commit -m x 2>/dev/null", "git commit -s>/dev/null -m x",
                         "cat <<EOF > notes.txt\nplain text\nEOF\ngit add notes.txt"):
             with self.subTest(command=command):
