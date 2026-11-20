@@ -336,6 +336,24 @@ class PrePush(Repo):
         self.assertEqual(self.sh("git push -q origin :side").returncode, 0)
 
 
+class NoreplyEmail(Repo):
+    def setUp(self):
+        super().setUp()
+        self.noreply = "12345+octocat@users." + "noreply.github.com"
+        self.personal_email = "someone" + "@example.org"
+        self.git("config", "user.email", self.noreply)
+        self.git("config", "--global", "user.email", self.personal_email)
+
+    def test_noreply_commits_but_the_global_email_is_refused(self):
+        self.write("owner.json", f'{{"email": "{self.noreply}"}}\n')
+        result = self.sh("git add owner.json && git commit -q -m owner")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.write("me.txt", f"{self.personal_email}\n")
+        result = self.sh("git add me.txt && git commit -q -m me")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("me.txt:1 personal", result.stderr)
+
+
 class NoPersonal(Repo):
     personal = False
 

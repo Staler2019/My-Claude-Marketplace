@@ -141,6 +141,20 @@ class Personal(unittest.TestCase):
             os.unlink(fh.name)
         self.assertEqual(got, ("/h/me", "me" + "@example.org", "some-handle"))
 
+    def test_github_noreply_email_is_not_personal(self):
+        domain = "@users." + "noreply.github.com"
+        noreply = "12345+octocat" + domain
+        kept = ["me" + "@example.org", "noreply" + "@example.org", "real@example.com.users." + "noreply.github.com",
+                "x" + domain + ".evil", "x@sub.users." + "noreply.github.com", "a@b.com" + domain]
+        with tempfile.NamedTemporaryFile("w", delete=False) as fh:
+            fh.write(noreply + "\n")
+        try:
+            got = personal_literals("/h/me", [noreply, noreply.upper(), *kept], fh.name)
+        finally:
+            os.unlink(fh.name)
+        # Only the email candidates are exempt; the same value written in the patterns file counts.
+        self.assertEqual(got, ("/h/me", *kept, noreply))
+
     def test_missing_file_keeps_home_and_emails(self):
         self.assertEqual(personal_literals("/h/me", [], "/nonexistent/x"), ("/h/me",))
 

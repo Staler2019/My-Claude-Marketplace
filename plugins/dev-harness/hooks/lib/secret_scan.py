@@ -42,6 +42,7 @@ NAME_RULES = (".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.
               "id_rsa*", "id_ed25519*", "id_ecdsa*", ".netrc", ".npmrc", ".pypirc", ".git-credentials",
               "*credentials*", ".mcp.json", ".claude.json", "settings.local.json", "*.jsonl")
 MIN_PERSONAL = 4
+NOREPLY_SUFFIX = "@users.noreply.github.com"
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 Line = Tuple[str, int, str]
@@ -108,9 +109,15 @@ def scan_names(paths: Iterable[str]) -> List[Finding]:
     return findings
 
 
+def is_github_noreply(email: str) -> bool:
+    lowered = email.lower()
+    return lowered.count("@") == 1 and lowered.endswith(NOREPLY_SUFFIX)
+
+
 def personal_literals(home: str, emails: Iterable[str], patterns_file: Optional[str]) -> Tuple[str, ...]:
-    """$HOME, the git emails, then the patterns file (`#` and blank lines skipped, short ones dropped)."""
-    candidates = [home, *emails]
+    """$HOME, the git emails, then the patterns file (`#` and blank lines skipped, short ones dropped).
+    A GitHub noreply git email is left out: it is public once used as a commit identity."""
+    candidates = [home, *(email for email in emails if not is_github_noreply(email))]
     try:
         with open(patterns_file or "", encoding="utf-8") as fh:
             candidates += [line.strip() for line in fh if not line.lstrip().startswith("#")]

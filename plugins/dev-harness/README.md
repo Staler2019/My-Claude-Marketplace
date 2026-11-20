@@ -39,6 +39,9 @@ What is checked, on every added line, file name, commit message and annotated ta
 - personal values: your home path, the repo and global `user.email`, and every line of
   `~/.config/dev-harness/personal-patterns.txt` (4+ characters, `#` lines skipped).
   `--no-personal` turns this group off for repos where those values are expected.
+  A git email ending in `@users.noreply.github.com` is not treated as personal: it is public
+  once used as a commit identity. A personal email that `git config` does not return (for
+  example one set only through `includeIf`) is caught only when written into the patterns file.
 
 Findings are printed masked (`ghp_••••`, `personal ••••`). `pre-push` scans every commit the
 remote does not hold (asked with `git ls-remote`), so a secret added and later removed is still
