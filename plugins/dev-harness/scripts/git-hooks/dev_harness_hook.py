@@ -18,6 +18,8 @@ EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 ZERO = "0" * 40
 PATTERNS_FILE = "~/.config/dev-harness/personal-patterns.txt"
 SCISSORS = "# ------------------------ >8 ------------------------"
+DIFF_LINE_STARTS = ("-", " ", "@@", "diff --git ", "index ", "new file mode", "deleted file mode",
+                    "similarity index", "rename from", "rename to", "Binary files")
 
 
 def _scanner():
@@ -53,11 +55,18 @@ def _commit_findings(scan, personal) -> List:
 
 
 def _message_findings(scan, personal, message_file: str) -> List:
-    """The message as git will store it: `#` comment lines and everything below the scissors dropped."""
+    """Every line of the message file: `git commit -m` keeps `#` lines, so they are scanned too.
+    Below a scissors line only the `git commit -v` diff's removed, context and header lines are
+    skipped; its added lines were already scanned by pre-commit."""
     with open(message_file, encoding="utf-8", errors="replace") as fh:
-        text = fh.read().split(SCISSORS, 1)[0]
-    kept = "\n".join("" if line.startswith("#") else line for line in text.split("\n"))
-    return scan.scan_text("commit-msg", kept, personal)
+        lines = fh.read().split("\n")
+    below, kept = False, []
+    for line in lines:
+        if line == SCISSORS:
+            below = True
+        skip = below and (line == SCISSORS or line.startswith(DIFF_LINE_STARTS))
+        kept.append("" if skip else line)
+    return scan.scan_text("commit-msg", "\n".join(kept), personal)
 
 
 def _tag_message(sha: str) -> str:

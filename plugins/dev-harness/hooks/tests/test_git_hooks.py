@@ -142,20 +142,32 @@ class CommitMessage(Repo):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("personal", result.stderr)
 
-    def test_comment_lines_and_the_verbose_diff_are_not_scanned(self):
-        # git drops `#` lines and everything under the scissors line before storing the message.
+    def run_commit_msg(self, text):
         message = self.tmp / "MSG"
-        message.write_text(f"plain subject\n# {GITHUB_TOKEN}\n"
-                           "# ------------------------ >8 ------------------------\n"
-                           f"+{GITHUB_TOKEN}\n")
-        hooks_dir = self.repo / ".git" / "hooks"
-        result = subprocess.run([sys.executable, str(hooks_dir / "commit-msg"), str(message)], cwd=self.repo,
-                                env=self.env, capture_output=True, text=True)
+        message.write_text(text)
+        return subprocess.run([sys.executable, str(self.repo / ".git" / "hooks" / "commit-msg"), str(message)],
+                              cwd=self.repo, env=self.env, capture_output=True, text=True)
+
+    def test_hash_lines_are_scanned_because_dash_m_keeps_them(self):
+        result = self.git("commit", "--allow-empty", "-m", f"#leak {GITHUB_TOKEN}", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("commit-msg:1 github-pat", result.stderr)
+
+    def test_verbose_diff_below_the_scissors_skips_removed_and_context_lines(self):
+        # `git commit -v` shows the staged diff; removing a secret must not be refused.
+        result = self.run_commit_msg("remove leaked key\n"
+                                     "# ------------------------ >8 ------------------------\n"
+                                     "diff --git a/k.txt b/k.txt\n--- a/k.txt\n+++ b/k.txt\n@@ -1 +0,0 @@\n"
+                                     f"-{GITHUB_TOKEN}\n {GITHUB_TOKEN}\n")
         self.assertEqual(result.returncode, 0, result.stderr)
-        message.write_text(f"subject\nbody {GITHUB_TOKEN}\n")
-        result = subprocess.run([sys.executable, str(hooks_dir / "commit-msg"), str(message)], cwd=self.repo,
-                                env=self.env, capture_output=True, text=True)
-        self.assertIn("commit-msg:2 github-pat", result.stderr)
+
+    def test_free_text_below_the_scissors_is_scanned(self):
+        result = self.run_commit_msg("subject\n# ------------------------ >8 ------------------------\n"
+                                     f"note {GITHUB_TOKEN}\n")
+        self.assertIn("commit-msg:3 github-pat", result.stderr)
+
+    def test_body_token_is_reported_with_its_line(self):
+        self.assertIn("commit-msg:2 github-pat", self.run_commit_msg(f"subject\nbody {GITHUB_TOKEN}\n").stderr)
 
 
 class PrePush(Repo):
