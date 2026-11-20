@@ -146,6 +146,25 @@ class PreCommit(Repo):
         self.assertIn("s.txt:1 github-pat", result.stderr)
 
 
+class MergeCommit(Repo):
+    def test_merge_bringing_in_a_secret_is_rejected(self):
+        self.git("switch", "-q", "-c", "side")
+        self.write("k.txt", GITHUB_TOKEN + "\n")
+        self.git("add", "k.txt")
+        self.git("commit", "-q", "--no-verify", "-m", "side")
+        self.git("switch", "-q", "main")
+        result = self.git("merge", "--no-ff", "-m", "merge side", "side", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("k.txt:1 github-pat", result.stderr)
+
+    def test_clean_merge_passes(self):
+        self.git("switch", "-q", "-c", "side")
+        self.write("ok.txt", "fine\n")
+        self.sh("git add ok.txt && git commit -q -m side")
+        self.git("switch", "-q", "main")
+        self.assertEqual(self.git("merge", "-q", "--no-ff", "-m", "merge side", "side", check=False).returncode, 0)
+
+
 class CommitMessage(Repo):
     def test_token_in_the_message_is_rejected_and_masked(self):
         self.write("ok.txt", "fine\n")

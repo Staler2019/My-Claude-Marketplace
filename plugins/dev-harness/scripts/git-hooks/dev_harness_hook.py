@@ -1,4 +1,4 @@
-"""dev-harness secret guard shared by the pre-commit, commit-msg and pre-push hooks.
+"""dev-harness secret guard shared by the pre-commit, pre-merge-commit, commit-msg and pre-push hooks.
 
 Installed as a self-contained copy next to `secret_scan.py` in a repo's hooks dir; in the
 plugin source tree (and only there) it finds the scanner in `hooks/lib/`. Any error exits 1: a guard that

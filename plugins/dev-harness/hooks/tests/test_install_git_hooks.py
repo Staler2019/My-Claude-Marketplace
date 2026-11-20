@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 INSTALLER = Path(__file__).resolve().parent.parent.parent / "scripts" / "install-git-hooks"
-COPIED = {"pre-commit", "commit-msg", "pre-push", "dev_harness_hook.py", "secret_scan.py", "dev-harness.conf"}
+COPIED = {"pre-commit", "pre-merge-commit", "commit-msg", "pre-push", "dev_harness_hook.py", "secret_scan.py", "dev-harness.conf"}
 
 
 class Installer(unittest.TestCase):
@@ -42,7 +42,7 @@ class Installer(unittest.TestCase):
         self.assertEqual(self.dev_harness_files(), COPIED)
         for name in COPIED:
             self.assertIn(str(self.hooks / name), result.stdout)
-        for hook in ("pre-commit", "commit-msg", "pre-push"):
+        for hook in ("pre-commit", "pre-merge-commit", "commit-msg", "pre-push"):
             self.assertTrue(os.access(self.hooks / hook, os.X_OK))
         self.assertEqual((self.hooks / "dev-harness.conf").read_text(), "personal=on\n")
 

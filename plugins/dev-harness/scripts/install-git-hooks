@@ -16,13 +16,14 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SOURCES = {
     "pre-commit": HERE / "git-hooks" / "pre-commit",
+    "pre-merge-commit": HERE / "git-hooks" / "pre-merge-commit",
     "commit-msg": HERE / "git-hooks" / "commit-msg",
     "pre-push": HERE / "git-hooks" / "pre-push",
     "dev_harness_hook.py": HERE / "git-hooks" / "dev_harness_hook.py",
     "secret_scan.py": HERE.parent / "hooks" / "lib" / "secret_scan.py",
 }
 MARKER = "dev-harness"
-HOOK_NAMES = ("pre-commit", "commit-msg", "pre-push")
+HOOK_NAMES = ("pre-commit", "pre-merge-commit", "commit-msg", "pre-push")
 
 
 def git(repo: str, *args: str) -> str:
