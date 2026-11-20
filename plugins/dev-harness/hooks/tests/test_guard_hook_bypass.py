@@ -33,52 +33,53 @@ class Denied(unittest.TestCase):
 
     def test_long_flag_on_any_git_command_even_wrapped(self):
         self.assert_denied(SKIP, f"git commit {SKIP} -m x", f"git push {SKIP}",
-                           f"sh -c 'git commit {SKIP} -m x'", f"git merge {SKIP} side")
+                           f"sh -c 'git commit {SKIP} -m x'", f"git merge {SKIP} side",
+                           f'bash -lc "cd r && git commit {SKIP} -m x"', f'eval "git push {SKIP}"')
 
     def test_abbreviated_or_quote_split_long_flag(self):
-        # git accepts any unique prefix of a long option, and the shell joins quoted pieces.
-        self.assert_denied(SKIP, f"git commit {SKIP[:-1]} -m x",
+        # git accepts a unique prefix of a long option, and the shell joins quoted pieces.
+        self.assert_denied(SKIP, f"git commit {SKIP[:-1]} -m x", f"git push {SKIP[:-2]} origin main",
                            "git commit --no-\\\nverify -m x", 'git commit "--no-\\\nverify" -m x',
-                           "git commit --no-{verify,verify} -m x", f"g'i't commit {SKIP} -m x",
-                           f"gi\\t commit {SKIP} -m x", "git commit --no-ve{r,r}ify -m x",
-                           "git commit --n{o,o}-verify -m x", "git commit --no-ve{r..r}ify -m x",
-                           "git commit --{n..n}o-verify -m x", f"g{{i..i}}t commit {SKIP} -m x",
+                           f"g'i't commit {SKIP} -m x", f"gi\\t commit {SKIP} -m x",
                            "git commit --no-ver``ify -m x", "git commit --no-ver$()ify -m x",
-                           f"git push {SKIP[:-2]} origin main", f"git commit '{SKIP[:-1]}''y' -m x",
-                           'git commit "--no-"verify -m x', "git commit -m x --no-$'verify'",
-                           "git commit --no-$'ver'ify -m x", 'git commit --no-$"verify" -m x',
-                           "git push origin main --no-$'verif'")
+                           f"git commit '{SKIP[:-1]}''y' -m x", 'git commit "--no-"verify -m x',
+                           "git commit -m x --no-$'verify'", "git commit --no-$'ver'ify -m x",
+                           'git commit --no-$"verify" -m x', "git push origin main --no-$'verif'",
+                           f"git commit -m x \\{SKIP}")
+
+    def test_brace_expansion_in_a_git_command(self):
+        # Any unquoted brace expansion in a git command is refused: list paths one by one.
+        self.assert_denied("brace", "git commit --no-{verify,verify} -m x", "git commit --no-ve{r..r}ify -m x",
+                           "git commit --n{o,o}-verify -m x", "g{i..i}t commit -m x",
+                           f'echo {{; git commit -m a, {SKIP}; echo }}', 'git commit {-m"x}",--no-ve}rify',
+                           "git commit {-m'x}',--no-ve}rify", 'git commit {-m"x{y}",--no-ve}rify',
+                           "git commit {-m\\},--no-ve}rify", "git add src/{a,b}.py",
+                           "git commit " + "{a,b}" * 9 + " -m x", "git commit {1..1000000000000} -m x")
 
     def test_short_n_on_commit(self):
         self.assert_denied("-n", "git commit -n -m x", "git commit -nm x", "git commit -m x -n",
-                           "git -C repo commit -an")
+                           "git -C repo commit -an", "git commit -m x -\\\nn",
+                           "git --attr-source HEAD commit -n -m x", "git --config-env a=B commit -n")
 
     def test_hooks_path_override_any_spelling(self):
         self.assert_denied("core.hooksPath", 'sh -c "git -c core.hooksPath=/dev/null commit"',
-                           "git -c core.hookspath= push", "git config core.hooksPath /tmp/x")
+                           "git -c core.hookspath= push", "git config core.hooksPath /tmp/x",
+                           "git -ccore.hooksPath=/dev/null commit", "git --config-env=core.hooksPath=V commit",
+                           "git -c core.hooks'Path'= push")
 
     def test_config_injection_through_environment(self):
         self.assert_denied("GIT_CONFIG_COUNT", "GIT_CONFIG_COUNT=1 git commit -m x")
         self.assert_denied("GIT_CONFIG_PARAMETERS", "GIT_CONFIG_PARAMETERS=x git push")
 
 
-    def test_brace_decoys_do_not_hide_the_flag(self):
-        # Quoted, escaped or cross-command braces are not brace groups to bash.
-        self.assert_denied(SKIP, f'echo "{{"; git commit -m "a,b" {SKIP}; echo "}}"',
-                           f"echo {{; git commit -m a, {SKIP}; echo }}",
-                           'git commit {-m"}",--no-ve}rify', "git commit {-m\\},--no-ve}rify")
-
-    def test_too_many_brace_variants_fails_closed(self):
-        self.assert_denied("brace", "git commit " + "{a,b}" * 9 + " -m x", "git commit {1..100000} -m x",
-                           "git commit {1..1000000000000} -m x")
-
-
 class Allowed(unittest.TestCase):
     def test_ordinary_commands(self):
         for command in ('git commit -m "no verify"', "git commit --no-edit", "git log --no-walk",
                         "git fetch --no-verbose", "git merge --no-verify-signatures main",
-                        "git log --format=%H,%s", 'git commit -m "{a,b} $HOME"',"git commit -mnope", "git commit -m -n",
-                        "git log -n 3", "git commit -F notes.txt", "echo hello", ""):
+                        "git log --format=%H,%s", 'git commit -m "{a,b} $HOME"', "git commit -mnope",
+                        "git commit -m -n", "git log -n 3", "git commit -F notes.txt", "echo hello", "",
+                        f'git commit -m "docs: never pass {SKIP}"', "git add src/a.py src/b.py",
+                        "git log --format='{%H,%s}'"):
             with self.subTest(command=command):
                 self.assertIsNone(decide(command))
 

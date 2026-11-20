@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 """PreToolUse(Bash): refuse git commands that would skip the native pre-commit / pre-push hooks.
 
-The command text is first expanded and flattened the way the shell would build its words:
-backslash-newline continuations are joined, brace groups (`{a,b}`, `{x..y}`) are expanded into
-every variant (capped at MAX_VARIANTS), and in each variant quotes, `$'`/`$"` openers,
-backslashes and empty `$()` / backtick pairs are removed. Blocked when a flattened variant
-mentions `git` and any of: the long skip-verify flag or an abbreviation git
-accepts for it (`--no-veri` and longer; shorter prefixes are ambiguous to git and rejected by
-it), a `core.hooksPath` override, or `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT` injection.
-The whole text is checked, so `sh -c '...'` wrappers are caught too. `git commit -n` (alone or
-in a short flag cluster) is judged per segment, so `git commit -m -n` and `git log -n 3` pass.
-Registered with "onFailure": "block": a crash or timeout of this guard denies the command.
+The command is read the way the shell builds its words: backslash-newline continuations are
+joined, `$'…'` / `$"…"` are read as quotes, empty `$()` / backtick pairs are dropped, and then
+quotes and backslashes are resolved by a shell-word splitter. Refused, whenever the command
+involves git:
+  - any unquoted brace expansion (`{a,b}`, `{x..y}`) anywhere in the command — the shell can
+    assemble a flag or the word `git` itself from braces, so paths are listed one by one;
+  - a word that is the skip-verify long flag or an abbreviation git accepts for it
+    (`--no-veri` and longer; shorter prefixes are ambiguous to git and rejected by it);
+  - a word naming `core.hooksPath` (`-c`, `-c<value>`, `--config-env`, `git config`);
+  - `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT` anywhere in the text;
+  - `git commit -n`, alone or in a short flag cluster.
+A word holding a whole command line (`sh -c '…'`, `eval "…"`) that mentions git is judged as a
+command of its own; message text that does not mention git is not, so `-m "never pass <flag>"`
+passes. Registered with "onFailure": "block": a crash or timeout of this guard denies the
+command.
 
 Out of reach of a text check, and not covered: flag text the shell produces at run time —
 `$'\\x..'` / `$'\\NNN'` escape sequences, variable or parameter expansion, non-empty command
-substitution, pathname globbing, eval, aliases, and commands read from script files. The
-`-n` check reads shell words without brace expansion or line joining. The native hooks cannot
-catch a skipped run either; a server-side scan (e.g. GitHub push protection) is the backstop.
+substitution, pathname globbing, aliases, and commands read from script files. The native hooks
+cannot catch a skipped run either; a server-side scan (e.g. GitHub push protection) is the
+backstop.
 """
 import json
 import re
@@ -28,23 +33,17 @@ PREFIX = "Blocked by dev-harness/guard-hook-bypass:"
 SKIP_FLAG = "--no-" + "verify"
 # git takes a unique prefix of a long option; `--no-veri` is the shortest one that is not
 # ambiguous with `--no-verbose`, so `--no-veri`, `--no-verif` and the full flag count.
-SKIP_SPELLINGS = r"--no-veri(?:f(?:y)?)?(?![\w-])"
-# Marks that only join pieces of one word: a quote (with a `$` opener), a backslash, an empty
-# command substitution.
-_JOIN_MARKS = re.compile(r"""\$\(\)|``|\$(?=['"])|['"\\]""")
-# One brace group with no group inside it: `{a,b}` or `{x..y}` / `{x..y..step}`.
+SKIP_WORD = re.compile(r"--no-veri(?:f(?:y)?)?")
+HOOKS_PATH = re.compile(r"(?i)core\.hookspath")
+ENV_INJECTION = re.compile(r"\bGIT_CONFIG_(PARAMETERS|COUNT)\b")
+# One brace group with a comma or a `..` range and no group inside it.
 _BRACE = re.compile(r"\{([^{}]*)\}")
+_EXPANDING = re.compile(r"\{[^{}]*(?:,|\.\.)[^{}]*\}")
 _SEQUENCE = re.compile(r"^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])(?:\.\.(-?\d+))?$")
 MAX_VARIANTS = 256
-# A brace bash takes as a literal character: escaped, or alone inside quotes.
-_QUOTED_BRACE = re.compile(r"""\\[{}]|"[{}]"|'[{}]'""")
-RAW_MARKERS = (
-    (re.compile(SKIP_SPELLINGS), SKIP_FLAG),
-    (re.compile(r"(?i)core\.hookspath"), "core.hooksPath"),
-    (re.compile(r"\bGIT_CONFIG_PARAMETERS\b"), "GIT_CONFIG_PARAMETERS"),
-    (re.compile(r"\bGIT_CONFIG_COUNT\b"), "GIT_CONFIG_COUNT"),
-)
-GIT_OPTIONS_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace")
+MAX_DEPTH = 4
+GIT_OPTIONS_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--attr-source",
+                          "--config-env", "--super-prefix", "--exec-path")
 # Short commit options whose value is the rest of the cluster or the next word.
 COMMIT_SHORT_WITH_VALUE = "mFcCt"
 COMMIT_LONG_WITH_VALUE = ("--message", "--file", "--reuse-message", "--reedit-message",
@@ -80,12 +79,44 @@ def commit_skips_hooks(rest: list) -> bool:
     return False
 
 
+def normalized(cmd: str) -> str:
+    """Line continuations joined, `$'`/`$"` read as plain quotes, empty substitutions dropped."""
+    text = cmd.replace("\\\n", "")
+    text = re.sub(r"\$(?=['\"])", "", text)
+    return re.sub(r"\$\(\)|``", "", text)
+
+
+def unquoted_view(text: str) -> str:
+    """`text` with every quoted or backslash-escaped character replaced by `_`: what is left is
+    what the shell reads as syntax, braces included."""
+    out, quote, i = [], None, 0
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if c == quote:
+                quote = None
+                out.append(c)
+            elif c == "\\" and quote == '"' and i + 1 < len(text):
+                out.append("__")
+                i += 1
+            else:
+                out.append("_")
+        elif c == "\\" and i + 1 < len(text):
+            out.append("__")
+            i += 1
+        else:
+            if c in "'\"":
+                quote = c
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
 class _TooMany(Exception):
     """More brace variants than MAX_VARIANTS."""
 
 
 def _alternatives(inner: str):
-    """The words bash makes of one brace group, or None when the group is literal text."""
     sequence = _SEQUENCE.match(inner)
     if sequence:
         first, last, step = sequence.group(1), sequence.group(2), abs(int(sequence.group(3) or 1)) or 1
@@ -101,62 +132,55 @@ def _alternatives(inner: str):
     return parts if len(parts) > 1 else None
 
 
-def brace_variants(text: str):
-    """Every text bash brace expansion could make of `text`; None past MAX_VARIANTS."""
-    done, pending = [], [text]
-    while pending:
-        if len(done) + len(pending) > MAX_VARIANTS:
-            return None
-        current = pending.pop()
-        for group in _BRACE.finditer(current):
-            options = _alternatives(group.group(1))
-            if options is not None:
-                head, tail = current[:group.start()], current[group.end():]
-                pending.extend(head + option + tail for option in options)
-                break
-        else:
-            done.append(current)
-    return done
+def spells_git_by_braces(view: str) -> bool:
+    """True when some brace expansion of the unquoted view contains `git`, or there are too many
+    variants to tell."""
+    pending, seen = [view], 0
+    try:
+        while pending:
+            seen += 1
+            if seen > MAX_VARIANTS:
+                return True
+            current = pending.pop()
+            for group in _BRACE.finditer(current):
+                options = _alternatives(group.group(1))
+                if options is not None:
+                    pending.extend(current[:group.start()] + o + current[group.end():] for o in options)
+                    break
+            else:
+                if "git" in current:
+                    return True
+    except _TooMany:
+        return True
+    return False
 
 
-def candidate_texts(cmd: str):
-    """The texts to judge: the command as written, and its brace-expansion variants read both
-    with every `{`/`}` live and with quoted or escaped ones dropped (bash expands neither, and a
-    quoted `}` does not close a group). None when the variants exceed MAX_VARIANTS."""
-    text = cmd.replace("\\\n", "")
-    unquoted_braces = _QUOTED_BRACE.sub("", text)
-    texts = [text]
-    for source in (text, unquoted_braces):
-        try:
-            variants = brace_variants(source)
-        except _TooMany:
-            return None
-        if variants is None:
-            return None
-        texts.extend(variants)
-    return texts
-
-
-def violation(cmd: str):
-    variants = candidate_texts(cmd)
-    if variants is None:
-        # Not every variant was checked, and braces can spell `git` itself: fail closed.
+def judge(cmd: str, depth: int = 0):
+    text = normalized(cmd)
+    flat = re.sub(r"['\"\\]", "", text)
+    view = unquoted_view(text)
+    involves_git = "git" in flat
+    if _EXPANDING.search(view) and (involves_git or spells_git_by_braces(view)):
         return reason("brace expansion")
-    for variant in variants:
-        joined = _JOIN_MARKS.sub("", variant)
-        if "git" not in joined:
-            continue
-        for pattern, naming in RAW_MARKERS:
-            if pattern.search(joined):
-                return reason(naming)
-    if "git" not in cmd:
+    if not involves_git:
         return None
-    for words in command_segments(cmd):
-        if words[0].rsplit("/", 1)[-1] != "git":
-            continue
-        args = git_subcommand(words[1:])
-        if args and args[0] == "commit" and commit_skips_hooks(args[1:]):
-            return reason("-n")
+    found = ENV_INJECTION.search(flat)
+    if found:
+        return reason(found.group(0))
+    for words in command_segments(text):
+        for word in words:
+            if SKIP_WORD.fullmatch(word):
+                return reason(SKIP_FLAG)
+            if HOOKS_PATH.search(word) and words[0].rsplit("/", 1)[-1] == "git":
+                return reason("core.hooksPath")
+            if depth < MAX_DEPTH and "git" in word and re.search(r"[\s;&|]", word):
+                nested = judge(word, depth + 1)
+                if nested:
+                    return nested
+        if words[0].rsplit("/", 1)[-1] == "git":
+            args = git_subcommand(words[1:])
+            if args and args[0] == "commit" and commit_skips_hooks(args[1:]):
+                return reason("-n")
     return None
 
 
@@ -165,7 +189,7 @@ def main() -> None:
         cmd = json.load(sys.stdin.buffer).get("tool_input", {}).get("command", "")
     except (ValueError, AttributeError):
         return
-    found = violation(cmd or "")
+    found = judge(cmd or "")
     if found:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                                  "permissionDecision": "deny",
