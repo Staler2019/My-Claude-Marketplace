@@ -205,6 +205,48 @@ class CommitMessage(Repo):
         result = self.run_commit_msg(f"remove leaked key\n{SCISSORS}\n{diff}")
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def commit_in_editor(self, *args):
+        editor = self.tmp / "editor.sh"
+        editor.write_text('#!/bin/sh\nprintf "subject\\n" | cat - "$1" > "$1.new" && mv "$1.new" "$1"\n')
+        editor.chmod(0o755)
+        return subprocess.run(["git", "commit", "-q", *args], cwd=self.repo, env=dict(self.env, GIT_EDITOR=str(editor)),
+                              capture_output=True, text=True)
+
+    def commit_leak(self):
+        self.write("k.txt", f"{GITHUB_TOKEN}\nkeep\n")
+        self.git("add", "k.txt")
+        self.git("commit", "-q", "--no-verify", "-m", "leak")
+
+    def test_amend_verbose_shows_the_diff_from_the_parent(self):
+        self.commit_leak()
+        self.write("k.txt", "keep\n")
+        self.git("add", "k.txt")
+        self.git("commit", "-q", "-m", "remove")
+        result = self.commit_in_editor("--amend", "-v")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_double_verbose_skips_removed_lines_of_the_unstaged_diff(self):
+        self.commit_leak()
+        self.write("k.txt", "keep\n")
+        self.write("ok.txt", "fine\n")
+        self.git("add", "ok.txt")
+        result = self.commit_in_editor("-v", "-v")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_double_verbose_still_scans_added_lines_of_the_unstaged_diff(self):
+        # Unstaged additions were never scanned by pre-commit, so they are not trusted.
+        self.write("ok.txt", "fine\n")
+        self.git("add", "ok.txt")
+        self.write("w.txt", "x\n")
+        self.git("add", "w.txt")
+        self.git("commit", "-q", "-m", "w")
+        self.write("w.txt", f"x\n{GITHUB_TOKEN}\n")
+        self.write("ok.txt", "fine2\n")
+        self.git("add", "ok.txt")
+        result = self.commit_in_editor("-v", "-v")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("github-pat", result.stderr)
+
     def test_diff_shaped_lines_not_in_the_staged_diff_are_scanned(self):
         # With -m nothing is cut at the scissors, so a forged tail would be stored as it is.
         for forged in (f" {GITHUB_TOKEN}", f"-{GITHUB_TOKEN}"):

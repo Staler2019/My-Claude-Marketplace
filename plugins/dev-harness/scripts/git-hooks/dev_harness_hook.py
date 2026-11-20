@@ -66,13 +66,25 @@ def _commit_findings(scan, personal) -> List:
     return scan.scan_names(names) + scan.scan_lines(scan.added_lines(patch), personal)
 
 
+def _verbose_diff_lines() -> set:
+    """Lines `git commit -v` may show below the scissors: the staged diff against HEAD and, for
+    --amend, against HEAD^; with -v -v also the unstaged diff, minus its `+` lines, which no hook
+    has scanned yet."""
+    shown = set(_git("diff", "--cached").split("\n"))
+    parent = subprocess.run(["git", "rev-parse", "-q", "--verify", "HEAD^"], capture_output=True, text=True)
+    if parent.returncode == 0:
+        shown |= set(_git("diff", "--cached", "HEAD^").split("\n"))
+    shown |= {line for line in _git("diff").split("\n") if not line.startswith("+") or line.startswith("+++ ")}
+    return shown
+
+
 def _message_findings(scan, personal, message_file: str) -> List:
     """Every line of the message file: `git commit -m` keeps `#` lines, so they are scanned too.
-    Below a scissors line a line is skipped only when it is a line of the staged diff that
-    `git commit -v` shows there; a forged diff-shaped tail (which `-m` would store) is scanned."""
+    Below a scissors line a line is skipped only when it is a line of a diff `git commit -v`
+    shows there; a forged diff-shaped tail (which `-m` would store) is scanned."""
     with open(message_file, encoding="utf-8", errors="replace") as fh:
         lines = fh.read().split("\n")
-    staged = set(_git("diff", "--cached").split("\n")) if SCISSORS in lines else set()
+    staged = _verbose_diff_lines() if SCISSORS in lines else set()
     below, kept = False, []
     for line in lines:
         if line == SCISSORS:
