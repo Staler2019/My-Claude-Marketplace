@@ -1,7 +1,7 @@
 """dev-harness secret guard shared by the pre-commit, commit-msg and pre-push hooks.
 
 Installed as a self-contained copy next to `secret_scan.py` in a repo's hooks dir; in the
-plugin source tree it finds the scanner in `hooks/lib/`. Any error exits 1: a guard that
+plugin source tree (and only there) it finds the scanner in `hooks/lib/`. Any error exits 1: a guard that
 cannot scan does not let the commit or push through.
 """
 import os
@@ -23,7 +23,12 @@ DIFF_LINE_STARTS = ("-", " ", "@@", "diff --git ", "index ", "new file mode", "d
 
 
 def _scanner():
-    for directory in (HERE, HERE.parent.parent / "hooks" / "lib"):
+    directories = [HERE]
+    # Only the plugin source tree may use its hooks/lib copy; an installed hook (in .git/hooks)
+    # must never load a scanner from the repo's work tree.
+    if HERE.name == "git-hooks" and (HERE.parent.parent / ".claude-plugin" / "plugin.json").is_file():
+        directories.append(HERE.parent.parent / "hooks" / "lib")
+    for directory in directories:
         if (directory / "secret_scan.py").is_file():
             sys.path.insert(0, str(directory))
             import secret_scan

@@ -126,6 +126,26 @@ class PreCommit(Repo):
         self.assertIn("dev-harness", result.stderr)
 
 
+    def test_installed_hook_never_loads_a_scanner_from_the_worktree(self):
+        # A repo's own hooks/lib/secret_scan.py must not stand in for the installed copy.
+        hooks_dir = self.repo / ".git" / "hooks"
+        (hooks_dir / "secret_scan.py").unlink()
+        self.write("hooks/lib/secret_scan.py", "raise SystemExit(0)\n")
+        self.write("s.txt", GITHUB_TOKEN + "\n")
+        result = self.sh("git add s.txt && git commit -m x")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("secret_scan.py not found", result.stderr)
+
+
+    def test_source_tree_hook_uses_the_plugin_scanner(self):
+        self.write("s.txt", GITHUB_TOKEN + "\n")
+        self.git("add", "s.txt")
+        result = subprocess.run([sys.executable, str(SCRIPTS / "git-hooks" / "pre-commit")], cwd=self.repo,
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("s.txt:1 github-pat", result.stderr)
+
+
 class CommitMessage(Repo):
     def test_token_in_the_message_is_rejected_and_masked(self):
         self.write("ok.txt", "fine\n")
