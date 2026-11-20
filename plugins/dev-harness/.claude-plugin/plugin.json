@@ -4,5 +4,6 @@
   "description": "Developer harness: role agents, plan-structure gate, git-discipline guards and a secret scanner with native git hooks.",
   "author": {
     "name": "Staler2019"
-  }
+  },
+  "license": "MIT"
 }
