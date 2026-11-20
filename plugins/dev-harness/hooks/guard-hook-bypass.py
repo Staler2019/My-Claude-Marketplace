@@ -2,8 +2,8 @@
 """PreToolUse(Bash): refuse git commands that would skip the native pre-commit / pre-push hooks.
 
 The command is read the way the shell builds its words: backslash-newline continuations are
-joined, `$'…'` / `$"…"` are read as quotes, empty `$()` / backtick pairs are dropped, and then
-quotes and backslashes are resolved by a shell-word splitter. Refused, whenever the command
+joined, `$'…'` / `$"…"` are read as quotes, `$()` / backtick pairs holding only blanks or
+comments are dropped, and then quotes and backslashes are resolved by a shell-word splitter. Refused, whenever the command
 involves git:
   - any unquoted brace expansion (`{a,b}`, `{x..y}`) anywhere in the command — the shell can
     assemble a flag or the word `git` itself from braces, so paths are listed one by one;
@@ -11,6 +11,7 @@ involves git:
     (`--no-veri` and longer; shorter prefixes are ambiguous to git and rejected by it);
   - `core.hooksPath` anywhere in the text (`-c`, `--config-env`, `git config`, and also an
     `echo` beside a git command);
+  - `alias.` anywhere in the text: an alias defined on the command line can carry any flag;
   - `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT` / `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM`
     anywhere in the text;
   - conservatively, any single-dash word holding an `n` anywhere after a word naming `commit`
@@ -40,6 +41,7 @@ from lib.shell_text import split_on_operators, tokens
 PREFIX = "Blocked by dev-harness/guard-hook-bypass:"
 SKIP_FLAG = "--no-" + "verify"
 HOOKS_PATH = re.compile(r"(?i)core\.hookspath")
+ALIAS = re.compile(r"(?i)\balias\.")
 ENV_INJECTION = re.compile(r"\bGIT_CONFIG_(PARAMETERS|COUNT|GLOBAL|SYSTEM)\b")
 # One brace group with a comma or a `..` range and no group inside it.
 _BRACE = re.compile(r"\{([^{}]*)\}")
@@ -64,17 +66,18 @@ def reason(naming: str) -> str:
 def commit_with_short_n(words: list) -> bool:
     after_commit = False
     for word in words:
-        if after_commit and SHORT_WITH_N.match(word) and "n" in re.split(r"[<>]", word, 1)[0]:
+        if after_commit and SHORT_WITH_N.match(word) and "n" in re.split(r"[<>]", word, maxsplit=1)[0]:
             return True
         after_commit = after_commit or bool(COMMIT_WORD.search(word))
     return False
 
 
 def normalized(cmd: str) -> str:
-    """Line continuations joined, `$'`/`$"` read as plain quotes, empty substitutions dropped."""
+    """Line continuations joined, `$'`/`$"` read as plain quotes, substitutions holding only
+    blanks or comments dropped."""
     text = cmd.replace("\\\n", "")
     text = re.sub(r"\$(?=['\"])", "", text)
-    return re.sub(r"\$\(\)|``", "", text)
+    return re.sub(r"\$\((?:\s|#[^\n]*)*\)|`\s*`", "", text)
 
 
 def unquoted_view(text: str) -> str:
@@ -189,6 +192,10 @@ def judge(cmd: str):
     found = ENV_INJECTION.search(flat)
     if found:
         return reason(found.group(0))
+    # An alias defined on the command line (`-c alias.x=…`, `git config alias.x …`) can carry any
+    # flag, in any order, past the word checks below.
+    if ALIAS.search(flat):
+        return reason("alias.*")
     # Judged over the whole command, never per segment: the guard cannot then split apart what
     # the shell keeps together (quoted operators, multi-line quotes, nesting at any depth).
     if HOOKS_PATH.search(flat):

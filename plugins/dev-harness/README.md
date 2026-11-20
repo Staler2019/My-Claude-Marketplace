@@ -48,7 +48,7 @@ caught. Any scanner or git error refuses the commit or push.
 
 `guard-hook-bypass` reads command text. It refuses the skip-verify flag in any literal spelling
 (quotes, escapes, line continuations), any brace expansion in a git command, `core.hooksPath` /
-`GIT_CONFIG_*` overrides, and — without parsing options or splitting the command — any single-dash word holding an `n`
+`GIT_CONFIG_*` overrides, any `alias.*` defined in the command, and — without parsing options or splitting the command — any single-dash word holding an `n`
 after `commit` (so `git commit -n`, but also `-m -n` or `commit … && git log -n 1`; use `-F` or
 separate commands for those). Text the shell builds at run time (variables,
 command substitution, `$'\x..'` escapes, globbing, aliases, scripts) is out of its reach, and a

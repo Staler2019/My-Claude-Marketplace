@@ -73,7 +73,7 @@ class Denied(unittest.TestCase):
                            'git commit -m ">" -n', "git commit -m 'x>' -n", 'git commit -m "a>" -n x',
                            "git -c 'a.b=>' commit -n", "git 2>|out commit -n", "git 1>| out commit -n",
                            "git >! out commit -n", "git >>! out commit -n", "git &>! out commit -n",
-                           "git >&! out commit -n", "git {fd}>/dev/null commit -n", "git -c alias.ci=commit ci -n",
+                           "git >&! out commit -n", "git {fd}>/dev/null commit -n",
                            "git commit -n>/dev/null")
 
     def test_any_short_cluster_with_n_after_commit_is_refused(self):
@@ -91,6 +91,16 @@ class Denied(unittest.TestCase):
                            'git commit -m "\n;" -n', "git commit -m \"subject\nbody\" -n\n# it's done",
                            "git commit -m \"subject\nbody\" -n; echo $'don\\'t'", deep,
                            "/usr/libexec/git-core/git-commit -n -m x")
+
+    def test_blank_substitutions_are_dropped(self):
+        self.assert_denied("-n", "git commit -m x $( )-n", "git commit -m x ` `-n", "git commit -m x $(\n)-n",
+                           "git commit -m x $( # c\n)-n")
+
+    def test_alias_defined_on_the_command_line(self):
+        # An alias can carry any flag past the word checks, so command-line aliases are refused.
+        self.assert_denied("alias", f"git -c alias.ci='commit {SKIP}' ci -m x", "git -c alias.ci='commit --no-veri' ci",
+                           "git -c alias.b='a -n' -c alias.a=commit b -m x", "git --config-env=alias.ci=V ci",
+                           "git config alias.ci 'commit -n'", "git -c alias.ci=commit ci -n")
 
     def test_hooks_path_anywhere_in_a_git_command(self):
         self.assert_denied("core.hooksPath", "git -c ';' -c core.hooksPath=/dev/null commit -m x",
