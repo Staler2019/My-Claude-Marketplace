@@ -15,8 +15,10 @@ involves git:
     anywhere in the text;
   - `git commit -n`, alone or in a short flag cluster.
 A segment runs git when any of its words is `git`, wherever it stands: after `{`, `!`, `if`,
-`do`, a redirection, or a runner such as `nice`, `timeout` or `xargs`. Heredoc bodies are judged
-as command lines too, since `bash <<EOF` runs them. A word holding a whole command line (`sh -c '…'`, `eval "…"`) that mentions git is judged as a
+`do`, a redirection, or a runner such as `nice`, `timeout` or `xargs`. Redirections are cut out
+of the words wherever they stand (`git 2>/dev/null commit`, `git>out`), and their targets are
+still judged. Heredoc and here-string bodies are judged as command lines too, since
+`bash <<EOF` / `bash <<<"…"` run them. A word holding a whole command line (`sh -c '…'`, `eval "…"`) that mentions git is judged as a
 command of its own; message text that does not mention git is not, so `-m "never pass <flag>"`
 passes. Registered with "onFailure": "block": a crash or timeout of this guard denies the
 command.
@@ -159,9 +161,47 @@ def spells_git_by_braces(view: str) -> bool:
     return False
 
 
+_FD_OPERATOR = re.compile(r"\d*[<>]&(?:\d+|-)|&>>?|>\|")
+_REDIRECT = re.compile(r"\d*(?:<<<|<<-?|<>|>>|<|>)")
+
+
+def without_fd_operators(text: str) -> str:
+    """Unquoted `2>&1`, `&>`, `>|` blanked out, so their `&` / `|` do not cut a command in two."""
+    view = unquoted_view(text)
+    out = list(text)
+    for found in _FD_OPERATOR.finditer(view):
+        # `&>` / `>|` still redirect to the next word; `2>&1` names no file.
+        keep = "" if found.group(0)[-1:].isdigit() or found.group(0).endswith("-") else ">"
+        out[found.start():found.end()] = keep.rjust(found.end() - found.start())
+    return "".join(out)
+
+
+def split_redirections(words: list):
+    """(argv, targets): the words a command runs with, and the redirection targets cut out of
+    them (`2>/dev/null`, `git>out`, a here-string body), which are still judged as text."""
+    argv, targets, take_next = [], [], False
+    for word in words:
+        if take_next:
+            targets.append(word)
+            take_next = False
+            continue
+        found = _REDIRECT.search(word)
+        if not found:
+            argv.append(word)
+            continue
+        if word[:found.start()]:
+            argv.append(word[:found.start()])
+        if word[found.end():]:
+            targets.append(word[found.end():])
+        else:
+            take_next = True
+    return argv, targets
+
+
 def segments(text: str):
     """Shell words split at operators and newlines, heredoc bodies included; with an unbalanced
     quote each line is split on its own."""
+    text = without_fd_operators(text)
     try:
         groups = [tokens(text)]
     except ValueError:
@@ -192,8 +232,9 @@ def judge(cmd: str, depth: int = 0):
     if found:
         return reason(found.group(0))
     for words in segments(text):
+        words, targets = split_redirections(words)
         runs_git = any(is_git(word) for word in words)
-        for word in words:
+        for word in words + targets:
             if SKIP_WORD.fullmatch(word):
                 return reason(SKIP_FLAG)
             if HOOKS_PATH.search(word) and runs_git:

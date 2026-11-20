@@ -64,7 +64,11 @@ class Denied(unittest.TestCase):
                            "for i in 1; do git commit -n -m x; done", "until git commit -n; do :; done",
                            ">/dev/null git commit -n", "2>/dev/null git commit -n", "nice git commit -n",
                            "timeout 5 git commit -n", "xargs git commit -n", 'echo "<<EOF"\ngit commit -n -m x\nEOF',
-                           "bash <<EOF\ngit commit -n -m x\nEOF")
+                           "bash <<EOF\ngit commit -n -m x\nEOF",
+                           "git 2>/dev/null commit -n -m x", "git </dev/null commit -n -m x",
+                           "git>/dev/null commit -n -m x", "git commit>/dev/null -n -m x",
+                           "git &>/dev/null commit -n", "git >| out commit -n", "git 2> err commit -n",
+                           'bash <<<"git commit -n -m x"', "bash<<<'git commit -n -m x'")
 
     def test_hooks_path_override_any_spelling(self):
         self.assert_denied("core.hooksPath", 'sh -c "git -c core.hooksPath=/dev/null commit"',
@@ -72,7 +76,10 @@ class Denied(unittest.TestCase):
                            "git -ccore.hooksPath=/dev/null commit", "git --config-env=core.hooksPath=V commit",
                            "git -c core.hooks'Path'= push", "{ git -c core.hooksPath=/dev/null push origin main; }",
                            "! git -c core.hooksPath=/dev/null push", "2>/dev/null git -c core.hooksPath=/dev/null push",
-                           "echo '<<X'\ngit -c core.hooksPath=/dev/null push\nX", "! git config core.hooksPath /dev/null")
+                           "echo '<<X'\ngit -c core.hooksPath=/dev/null push\nX", "! git config core.hooksPath /dev/null",
+                           "git>/dev/null -c core.hooksPath=/dev/null commit -m x",
+                           "git 2>&1 -c core.hooksPath=/dev/null commit -m x",
+                           'bash <<<"git -c core.hooksPath=/dev/null commit -m x"')
 
     def test_config_injection_through_environment(self):
         self.assert_denied("GIT_CONFIG_COUNT", "GIT_CONFIG_COUNT=1 git commit -m x")
@@ -88,7 +95,8 @@ class Allowed(unittest.TestCase):
                         "git log --format=%H,%s", 'git commit -m "{a,b} $HOME"', "git commit -mnope",
                         "git commit -m -n", "git log -n 3", "git commit -F notes.txt", "echo hello", "",
                         f'git commit -m "docs: never pass {SKIP}"', "git add src/a.py src/b.py",
-                        "git log --format='{%H,%s}'", "grep -n git notes.txt", "git push -n", "echo core.hooksPath; git status",
+                        "git log --format='{%H,%s}'", "grep -n git notes.txt", "git push -n", "echo core.hooksPath; git status", "git log -n 3 2>&1 | head", "git status >out.txt 2>&1",
+                        'git commit -m "a -> b" -F notes.txt', "git commit -m x 2>/dev/null",
                         "cat <<EOF > notes.txt\nplain text\nEOF\ngit add notes.txt"):
             with self.subTest(command=command):
                 self.assertIsNone(decide(command))
