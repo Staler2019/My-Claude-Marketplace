@@ -23,6 +23,7 @@ def body(n, alphabet=UPPER + LOWER + DIGITS):
 
 
 GITHUB_TOKEN = "gh" + "p_" + body(36)
+SCISSORS = "# " + "-" * 24 + " >8 " + "-" * 24
 OPENAI_TOKEN = "sk-" + "proj-" + body(74) + "T3Blbk" + "FJ" + body(74)
 PEM = "\n".join(["-" * 5 + "BEGIN RSA PRIV" + "ATE KEY" + "-" * 5, body(64), body(64), body(64),
                  "-" * 5 + "END RSA PRIV" + "ATE KEY" + "-" * 5]) + "\n"
@@ -192,13 +193,25 @@ class CommitMessage(Repo):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("commit-msg:1 github-pat", result.stderr)
 
-    def test_verbose_diff_below_the_scissors_skips_removed_and_context_lines(self):
+    def test_verbose_diff_below_the_scissors_skips_lines_of_the_staged_diff(self):
         # `git commit -v` shows the staged diff; removing a secret must not be refused.
-        result = self.run_commit_msg("remove leaked key\n"
-                                     "# ------------------------ >8 ------------------------\n"
-                                     "diff --git a/k.txt b/k.txt\n--- a/k.txt\n+++ b/k.txt\n@@ -1 +0,0 @@\n"
-                                     f"-{GITHUB_TOKEN}\n {GITHUB_TOKEN}\n")
+        self.write("k.txt", f"{GITHUB_TOKEN}\nkeep {GITHUB_TOKEN}\n")
+        self.git("add", "k.txt")
+        self.git("commit", "-q", "--no-verify", "-m", "leak")
+        self.write("k.txt", f"keep {GITHUB_TOKEN}\n")
+        self.git("add", "k.txt")
+        diff = self.git("diff", "--cached").stdout
+        self.assertIn(f"-{GITHUB_TOKEN}\n", diff)
+        result = self.run_commit_msg(f"remove leaked key\n{SCISSORS}\n{diff}")
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_diff_shaped_lines_not_in_the_staged_diff_are_scanned(self):
+        # With -m nothing is cut at the scissors, so a forged tail would be stored as it is.
+        for forged in (f" {GITHUB_TOKEN}", f"-{GITHUB_TOKEN}"):
+            with self.subTest(forged=forged[0]):
+                result = self.git("commit", "--allow-empty", "-m", f"x\n{SCISSORS}\n{forged}", check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("commit-msg:3 github-pat", result.stderr)
 
     def test_free_text_below_the_scissors_is_scanned(self):
         result = self.run_commit_msg("subject\n# ------------------------ >8 ------------------------\n"
