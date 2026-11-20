@@ -14,7 +14,8 @@ PLUGIN = HOOKS.parent
 sys.path.insert(0, str(HOOKS))
 
 from lib.secret_scan import (  # noqa: E402
-    Finding, added_lines, personal_literals, scan_lines, scan_names, scan_text)
+    Finding, added_lines, parse_allow, personal_literals, scan_lines, scan_names, scan_text,
+    split_allowed)
 
 UPPER, LOWER, DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz", "0123456789"
 
@@ -188,6 +189,58 @@ class FindingText(unittest.TestCase):
     def test_str_names_path_line_kind_mask(self):
         self.assertEqual(str(Finding("a.py", 3, "github-pat", "ghp_••••")),
                          "a.py:3 github-pat ghp_••••")
+
+    def test_str_appends_the_fingerprint_when_set(self):
+        self.assertEqual(str(Finding("a.py", 3, "github-pat", "ghp_••••", "0123456789abcdef")),
+                         "a.py:3 github-pat ghp_•••• fp:0123456789abcdef")
+
+
+class Allow(unittest.TestCase):
+    PLACEHOLDER = "api" + "Key = 'sk-live-xxxx'"
+
+    def fp(self, path="a.md", text=PLACEHOLDER, personal=()):
+        (finding,) = scan_lines([(path, 1, text)], personal, fingerprint=True)
+        return finding.fingerprint
+
+    def test_fingerprint_is_16_hex_and_stable(self):
+        value = self.fp()
+        self.assertRegex(value, r"^[0-9a-f]{16}$")
+        self.assertEqual(value, self.fp())
+
+    def test_fingerprint_changes_with_path_kind_or_text(self):
+        value = self.fp()
+        self.assertNotEqual(value, self.fp(path="b.md"))
+        self.assertNotEqual(value, self.fp(text=self.PLACEHOLDER + " "))
+        pat = tokens()["github-pat"]
+        found = scan_lines([("a.md", 1, "tok" + "en = " + pat)], (), fingerprint=True)
+        by_kind = {f.kind: f.fingerprint for f in found}
+        self.assertEqual(set(by_kind), {"github-pat", "generic-secret"})
+        self.assertNotEqual(by_kind["github-pat"], by_kind["generic-secret"])
+
+    def test_no_fingerprint_without_the_flag_or_for_personal_names_and_text(self):
+        self.assertEqual(scan_lines([("a.md", 1, self.PLACEHOLDER)], ())[0].fingerprint, "")
+        home = "/" + "Users/" + "someone"
+        (finding,) = scan_lines([("a.md", 1, home)], (home,), fingerprint=True)
+        self.assertEqual(finding.fingerprint, "")
+        self.assertEqual(scan_names([".env"])[0].fingerprint, "")
+        self.assertEqual(scan_text("commit-msg", self.PLACEHOLDER, ())[0].fingerprint, "")
+
+    def test_parse_allow_keeps_only_16_hex_first_tokens(self):
+        text = ("# comment\n\n0123456789ABCDEF  rules/a.md:3 generic-secret\n"
+                "0123456789abcde\nzz23456789abcdef\n0123456789abcdef0\nfedcba9876543210\n")
+        self.assertEqual(parse_allow(text), frozenset({"0123456789abcdef", "fedcba9876543210"}))
+
+    def test_split_allowed_judges_each_finding_on_its_own(self):
+        pat = tokens()["github-pat"]
+        found = scan_lines([("a.md", 1, "tok" + "en = " + pat)], (), fingerprint=True)
+        generic = next(f for f in found if f.kind == "generic-secret")
+        kept, allowed = split_allowed(found, frozenset({generic.fingerprint}))
+        self.assertEqual([f.kind for f in kept], ["github-pat"])
+        self.assertEqual(allowed, [generic])
+
+    def test_findings_without_fingerprint_are_never_allowed(self):
+        found = scan_names([".env"])
+        self.assertEqual(split_allowed(found, frozenset({""})), (found, []))
 
 
 if __name__ == "__main__":

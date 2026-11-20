@@ -7,9 +7,10 @@ time, so here the header line alone is the finding. Every rule needs a body afte
 which keeps this file's own regex text from matching itself.
 """
 import fnmatch
+import hashlib
 import re
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import FrozenSet, Iterable, List, Optional, Sequence, Tuple
 
 _END = r"""(?:[\x60'"\s;]|\\[nr]|$)"""
 TOKEN_RULES: Tuple[Tuple[str, "re.Pattern[str]"], ...] = tuple(
@@ -54,9 +55,11 @@ class Finding:
     line: int
     kind: str
     masked: str
+    fingerprint: str = ""
 
     def __str__(self) -> str:
-        return f"{self.path}:{self.line} {self.kind} {self.masked}"
+        text = f"{self.path}:{self.line} {self.kind} {self.masked}"
+        return f"{text} fp:{self.fingerprint}" if self.fingerprint else text
 
 
 def added_lines(patch: str) -> List[Line]:
@@ -77,18 +80,26 @@ def added_lines(patch: str) -> List[Line]:
     return found
 
 
-def scan_lines(lines: Iterable[Line], personal: Sequence[str]) -> List[Finding]:
+def line_fingerprint(path: str, kind: str, text: str) -> str:
+    return hashlib.sha256(f"{path}\0{kind}\0{text}".encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
+def scan_lines(lines: Iterable[Line], personal: Sequence[str], fingerprint: bool = False) -> List[Finding]:
+    """With `fingerprint`, token and generic findings carry the fingerprint an allow list names;
+    personal findings never do."""
     findings = []
     for path, number, text in lines:
+        def fp(kind: str) -> str:
+            return line_fingerprint(path, kind, text) if fingerprint else ""
         for rule_id, pattern in TOKEN_RULES:
             match = pattern.search(text)
             if match:
                 value = next((g for g in match.groups() if g), match.group(0))
-                findings.append(Finding(path, number, rule_id, value[:4] + "••••"))
+                findings.append(Finding(path, number, rule_id, value[:4] + "••••", fp(rule_id)))
         generic = GENERIC_RULE.search(text)
         if generic:
             masked = f"{generic.group(1).lower()}=<{len(generic.group(2))} chars>"
-            findings.append(Finding(path, number, "generic-secret", masked))
+            findings.append(Finding(path, number, "generic-secret", masked, fp("generic-secret")))
         lowered = text.lower()
         if any(literal.lower() in lowered for literal in personal):
             findings.append(Finding(path, number, "personal", "••••"))
@@ -107,6 +118,25 @@ def scan_names(paths: Iterable[str]) -> List[Finding]:
         if any(fnmatch.fnmatchcase(name, rule) for rule in NAME_RULES):
             findings.append(Finding(path, 0, "file-name", name))
     return findings
+
+
+_ALLOW_ENTRY = re.compile(r"[0-9a-f]{16}")
+
+
+def parse_allow(text: str) -> FrozenSet[str]:
+    """The first word of each non-blank, non-`#` line, when it is exactly 16 hex digits."""
+    entries = set()
+    for line in text.splitlines():
+        words = line.split()
+        if words and not words[0].startswith("#") and _ALLOW_ENTRY.fullmatch(words[0].lower()):
+            entries.add(words[0].lower())
+    return frozenset(entries)
+
+
+def split_allowed(findings: Sequence[Finding], allow: FrozenSet[str]) -> Tuple[List[Finding], List[Finding]]:
+    """(still refused, allowed): a finding is allowed only by its own listed fingerprint."""
+    kept = [f for f in findings if not (f.fingerprint and f.fingerprint in allow)]
+    return kept, [f for f in findings if f.fingerprint and f.fingerprint in allow]
 
 
 def is_github_noreply(email: str) -> bool:
