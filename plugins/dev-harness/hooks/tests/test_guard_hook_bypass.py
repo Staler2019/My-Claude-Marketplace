@@ -68,7 +68,19 @@ class Denied(unittest.TestCase):
                            "git 2>/dev/null commit -n -m x", "git </dev/null commit -n -m x",
                            "git>/dev/null commit -n -m x", "git commit>/dev/null -n -m x",
                            "git &>/dev/null commit -n", "git >| out commit -n", "git 2> err commit -n",
-                           'bash <<<"git commit -n -m x"', "bash<<<'git commit -n -m x'")
+                           'bash <<<"git commit -n -m x"', "bash<<<'git commit -n -m x'",
+                           'git commit -m ">" -n', "git commit -m 'x>' -n", 'git commit -m "a>" -n x',
+                           "git -c 'a.b=>' commit -n", "git 2>|out commit -n", "git 1>| out commit -n",
+                           "git >! out commit -n", "git >>! out commit -n", "git &>! out commit -n",
+                           "git >&! out commit -n", "git {fd}>/dev/null commit -n", "git -c alias.ci=commit ci -n",
+                           "git commit -n>/dev/null")
+
+    def test_any_short_cluster_with_n_after_commit_is_refused(self):
+        # Conservative: no option parsing, so a message such as `-m -n` is refused too.
+        self.assert_denied("-n", "git commit -m -n", "git commit -mnope", 'git commit -m "-n"')
+
+    def test_long_flag_glued_to_a_redirection(self):
+        self.assert_denied(SKIP, f"git commit {SKIP}>/dev/null -m x", f"git push {SKIP[:-1]}2>&1")
 
     def test_hooks_path_override_any_spelling(self):
         self.assert_denied("core.hooksPath", 'sh -c "git -c core.hooksPath=/dev/null commit"',
@@ -92,11 +104,10 @@ class Allowed(unittest.TestCase):
     def test_ordinary_commands(self):
         for command in ('git commit -m "no verify"', "git commit --no-edit", "git log --no-walk",
                         "git fetch --no-verbose", "git merge --no-verify-signatures main",
-                        "git log --format=%H,%s", 'git commit -m "{a,b} $HOME"', "git commit -mnope",
-                        "git commit -m -n", "git log -n 3", "git commit -F notes.txt", "echo hello", "",
+                        "git log --format=%H,%s", 'git commit -m "{a,b} $HOME"', "git log -n 3", "git commit -F notes.txt", "echo hello", "",
                         f'git commit -m "docs: never pass {SKIP}"', "git add src/a.py src/b.py",
                         "git log --format='{%H,%s}'", "grep -n git notes.txt", "git push -n", "echo core.hooksPath; git status", "git log -n 3 2>&1 | head", "git status >out.txt 2>&1",
-                        'git commit -m "a -> b" -F notes.txt', "git commit -m x 2>/dev/null",
+                        'git commit -m "a -> b" -F notes.txt', "git commit -m x 2>/dev/null", "git commit -s>/dev/null -m x",
                         "cat <<EOF > notes.txt\nplain text\nEOF\ngit add notes.txt"):
             with self.subTest(command=command):
                 self.assertIsNone(decide(command))
