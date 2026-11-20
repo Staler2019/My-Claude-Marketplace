@@ -31,9 +31,18 @@ def _scanner():
     raise RuntimeError(f"secret_scan.py not found next to {HERE}")
 
 
-def _git(*args: str) -> str:
-    return subprocess.run(["git", *args], capture_output=True, text=True, errors="replace",
+def _git(*args: str, stdin: str = "") -> str:
+    return subprocess.run(["git", *args], input=stdin, capture_output=True, text=True, errors="replace",
                           check=True).stdout
+
+
+def _remote_commits(remote: str) -> str:
+    """Commits the remote really holds (asked with ls-remote, not read from local tracking refs,
+    which can be stale), limited to the ones present here, as `git rev-list --stdin` input."""
+    held = {line.split()[0] for line in _git("ls-remote", remote).splitlines() if line.strip()}
+    known = [sha for sha in sorted(held)
+             if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True).returncode == 0]
+    return "--not\n" + "".join(f"{sha}\n" for sha in known)
 
 
 def _personal(scan) -> Sequence[str]:
@@ -76,14 +85,16 @@ def _tag_message(sha: str) -> str:
 
 
 def _push_findings(scan, personal, remote: str, updates: str) -> List:
-    findings = []
+    findings, exclude = [], None
     for line in updates.splitlines():
         fields = line.split()
         if len(fields) != 4 or fields[1] == ZERO:
             continue
         for finding in scan.scan_text("tag-message", _tag_message(fields[1]), personal):
             findings.append(f"{fields[1][:8]} {finding}")
-        for commit in _git("rev-list", fields[1], "--not", f"--remotes={remote}").split():
+        if exclude is None:
+            exclude = _remote_commits(remote)
+        for commit in _git("rev-list", fields[1], "--stdin", stdin=exclude).split():
             parents = _git("rev-list", "--parents", "-n", "1", commit).split()[1:] or [EMPTY_TREE]
             for parent in parents:
                 names = [n for n in _git("diff-tree", "-r", *NAME_FLAGS, parent, commit).split("\0") if n]
@@ -114,7 +125,9 @@ def main(mode: str) -> int:
         elif mode == "message":
             findings = _message_findings(scan, personal, sys.argv[1])
         else:
-            findings = _push_findings(scan, personal, sys.argv[1] if len(sys.argv) > 1 else "", sys.stdin.read())
+            # argv: remote name, remote URL; the URL also works for a push to a bare URL.
+            remote = sys.argv[2] if len(sys.argv) > 2 else sys.argv[1]
+            findings = _push_findings(scan, personal, remote, sys.stdin.read())
     except Exception as error:  # fail closed on anything, including a missing scanner
         _say(f"dev-harness {mode} guard failed ({type(error).__name__}: {error}); refusing.")
         return 1

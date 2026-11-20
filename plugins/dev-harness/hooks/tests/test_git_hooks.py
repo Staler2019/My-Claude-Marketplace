@@ -186,6 +186,34 @@ class PrePush(Repo):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("openai-api-key", result.stderr)
 
+    def test_stale_tracking_ref_does_not_hide_a_commit(self):
+        # The local origin/main claims the remote has the secret commit; the remote does not.
+        self.commit_skipping_hooks("k.txt", OPENAI_TOKEN + "\n", "add")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        result = self.sh("git push origin main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("openai-api-key", result.stderr)
+
+    def test_history_the_remote_already_holds_is_not_rescanned(self):
+        self.commit_skipping_hooks("k.txt", OPENAI_TOKEN + "\n", "old leak")
+        self.git("push", "-q", "--no-verify", "origin", "main")
+        self.git("update-ref", "-d", "refs/remotes/origin/main")
+        self.write("ok.txt", "fine\n")
+        self.sh("git add ok.txt && git commit -q -m ok")
+        result = self.sh("git push origin main")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_unreachable_remote_fails_closed(self):
+        self.write("ok.txt", "fine\n")
+        self.sh("git add ok.txt && git commit -q -m ok")
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        missing = str(self.tmp / "missing.git")
+        result = subprocess.run([sys.executable, str(self.repo / ".git" / "hooks" / "pre-push"), "origin", missing],
+                                input=f"refs/heads/main {head} refs/heads/main {'0' * 40}\n", cwd=self.repo,
+                                env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refusing", result.stderr)
+
     def test_private_key_committed_past_pre_commit_is_rejected_at_push(self):
         self.commit_skipping_hooks("notes.txt", PEM, "pem")
         result = self.sh("git push origin main")
