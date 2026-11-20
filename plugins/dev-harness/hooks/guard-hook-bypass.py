@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """PreToolUse(Bash): refuse git commands that would skip the native pre-commit / pre-push hooks.
 
+Best effort, not a gate: a text check cannot close every shell spelling. The native pre-push
+scan (every commit the remote does not hold) and a server-side scan are the gates; this guard
+only catches the common and the known ways of skipping a hook early.
+
 The command is read the way the shell builds its words: backslash-newline continuations are
 joined, `$'…'` / `$"…"` are read as quotes, `$()` / backtick pairs holding only blanks or
 comments are dropped, and then quotes and backslashes are resolved by a shell-word splitter. Refused, whenever the command
