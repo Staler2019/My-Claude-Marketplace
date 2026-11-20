@@ -59,7 +59,7 @@ class Finding:
 
 
 def added_lines(patch: str) -> List[Line]:
-    """(path, new line number, text) for each `+` line of a unified diff; NUL lines are skipped."""
+    """(path, new line number, text) for each `+` line of a unified diff; lines holding NUL (binary content) are scanned as they are."""
     found, path, number = [], None, 0
     for raw in patch.split("\n"):
         if raw.startswith("+++ "):
@@ -69,8 +69,7 @@ def added_lines(patch: str) -> List[Line]:
             hunk = _HUNK.match(raw)
             number = int(hunk.group(1)) if hunk else 0
         elif raw.startswith("+") and path is not None:
-            if "\x00" not in raw:
-                found.append((path, number, raw[1:]))
+            found.append((path, number, raw[1:]))
             number += 1
         elif raw.startswith(" ") and path is not None:
             number += 1
@@ -96,8 +95,8 @@ def scan_lines(lines: Iterable[Line], personal: Sequence[str]) -> List[Finding]:
 
 
 def scan_text(path: str, text: str, personal: Sequence[str]) -> List[Finding]:
-    return scan_lines(((path, i + 1, line) for i, line in enumerate(text.split("\n"))
-                       if "\x00" not in line), personal)
+    return scan_lines(((path, i + 1, line) for i, line in enumerate(text.split("\n"))),
+                      personal)
 
 
 def scan_names(paths: Iterable[str]) -> List[Finding]:

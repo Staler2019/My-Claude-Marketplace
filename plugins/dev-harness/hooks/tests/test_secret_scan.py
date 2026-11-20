@@ -75,9 +75,17 @@ class AddedLines(unittest.TestCase):
         self.assertEqual(added_lines(self.PATCH),
                          [("x.py", 4, "first"), ("x.py", 5, "second"), ("x.py", 12, "new")])
 
-    def test_skips_lines_holding_nul(self):
+    def test_lines_holding_nul_are_kept(self):
         patch = "+++ b/bin\n@@ -0,0 +1,2 @@\n+ok\n+a\x00b\n"
-        self.assertEqual(added_lines(patch), [("bin", 1, "ok")])
+        self.assertEqual(added_lines(patch), [("bin", 1, "ok"), ("bin", 2, "a\x00b")])
+
+    def test_token_next_to_nul_is_found(self):
+        value = tokens()["github-pat"]
+        found = scan_lines(added_lines(f"+++ b/bin\n@@ -0,0 +1 @@\n+{value}\x00\n"), ())
+        self.assertEqual([f.kind for f in found], ["github-pat"])
+        self.assertEqual([f.kind for f in scan_text("bin", f"\x00{value}\x00", ())], ["github-pat"])
+        # NUL splits nothing: a value running across it still counts toward the generic rule.
+        self.assertEqual([f.kind for f in scan_text("bin", "pass" + "word=abcdefg\x00h", ())], ["generic-secret"])
 
     def test_counts_context_lines(self):
         patch = "+++ b/c\n@@ -1,3 +1,4 @@\n keep\n+added\n keep\n"
