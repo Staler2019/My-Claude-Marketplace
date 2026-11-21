@@ -1,0 +1,481 @@
+"""End-to-end tests for the native git hooks: real temp repos, hooks installed by the installer.
+
+Tokens and personal values are built at run time; HOME and the global git config are pointed
+at the temp dir so the personal rules see injected values only.
+"""
+import hashlib
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+HOOKS = Path(__file__).resolve().parent.parent
+SCRIPTS = HOOKS.parent / "scripts"
+INSTALLER = SCRIPTS / "install-git-hooks"
+
+UPPER, LOWER, DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz", "0123456789"
+
+
+def body(n, alphabet=UPPER + LOWER + DIGITS):
+    return "".join(alphabet[i % len(alphabet)] for i in range(n))
+
+
+GITHUB_TOKEN = "gh" + "p_" + body(36)
+SCISSORS = "# " + "-" * 24 + " >8 " + "-" * 24
+OPENAI_TOKEN = "sk-" + "proj-" + body(74) + "T3Blbk" + "FJ" + body(74)
+PEM = "\n".join(["-" * 5 + "BEGIN RSA PRIV" + "ATE KEY" + "-" * 5, body(64), body(64), body(64),
+                 "-" * 5 + "END RSA PRIV" + "ATE KEY" + "-" * 5]) + "\n"
+EMAIL = "someone" + "@example.org"
+
+
+class Repo(unittest.TestCase):
+    personal = True
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.home = self.tmp / "home"
+        self.home.mkdir()
+        (self.home / ".gitconfig").write_text("")
+        self.env = dict(os.environ, HOME=str(self.home), GIT_CONFIG_GLOBAL=str(self.home / ".gitconfig"),
+                        GIT_CONFIG_NOSYSTEM="1", PYTHONDONTWRITEBYTECODE="1")
+        self.env.pop("GIT_DIR", None)
+        self.env.pop("GIT_INDEX_FILE", None)
+        self.repo = self.tmp / "repo"
+        self.remote = self.tmp / "remote.git"
+        self.git("init", "-q", "-b", "main", str(self.repo), cwd=self.tmp)
+        self.git("init", "-q", "--bare", str(self.remote), cwd=self.tmp)
+        self.git("config", "user.email", EMAIL)
+        self.git("config", "user.name", "T")
+        self.git("remote", "add", "origin", str(self.remote))
+        self.write("README.md", "hello\n")
+        self.git("add", "README.md")
+        self.git("commit", "-q", "-m", "init")
+        self.git("push", "-q", "origin", "main")
+        args = [sys.executable, str(INSTALLER)] + ([] if self.personal else ["--no-personal"]) + [str(self.repo)]
+        subprocess.run(args, check=True, capture_output=True, env=self.env)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def git(self, *args, cwd=None, check=True):
+        return subprocess.run(["git", *args], cwd=cwd or self.repo, env=self.env,
+                              capture_output=True, text=True, check=check)
+
+    def sh(self, command):
+        return subprocess.run(command, shell=True, cwd=self.repo, env=self.env, capture_output=True, text=True)
+
+    def write(self, name, text):
+        path = self.repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+
+class PreCommit(Repo):
+    def test_add_and_commit_in_one_command_is_rejected_and_masked(self):
+        self.write("s.txt", f"key: '{GITHUB_TOKEN}'\n")
+        result = self.sh("git add s.txt && git commit -m x")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("s.txt:1 github-pat ghp_", result.stderr)
+        self.assertNotIn(GITHUB_TOKEN, result.stderr + result.stdout)
+
+    def test_clean_commit_passes(self):
+        self.write("ok.txt", "nothing to see\n")
+        self.assertEqual(self.sh("git add ok.txt && git commit -q -m ok").returncode, 0)
+
+    def test_commit_all_scans_the_temporary_index(self):
+        self.write("README.md", f"hello {GITHUB_TOKEN}\n")
+        self.assertNotEqual(self.sh("git commit -a -m x").returncode, 0)
+
+    def test_binary_attribute_does_not_hide_content(self):
+        self.write(".gitattributes", "* -diff\n")
+        self.write("t.txt", OPENAI_TOKEN + "\n")
+        result = self.sh("git add .gitattributes t.txt && git commit -m x")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("openai-api-key", result.stderr)
+
+    def test_rename_to_a_key_file_name_is_rejected(self):
+        self.write("a.txt", "plain\n")
+        self.sh("git add a.txt && git commit -q -m a")
+        result = self.sh("git mv a.txt .env && git commit -m x")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(".env:0 file-name", result.stderr)
+
+    def test_private_key_in_an_ordinary_file_name(self):
+        self.write("notes.txt", PEM)
+        result = self.sh("git add notes.txt && git commit -m x")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("notes.txt:1 private-key-header", result.stderr)
+        self.assertNotIn(body(64), result.stderr)
+
+    def test_home_path_and_email_are_personal(self):
+        for text in (f"see {self.home}/x\n", f"mail {EMAIL}\n"):
+            with self.subTest(text=text.split()[0]):
+                self.write("p.txt", text)
+                result = self.sh("git add p.txt && git commit -m x")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("p.txt:1 personal ••••", result.stderr)
+                self.git("reset", "-q")
+
+    def test_missing_scanner_fails_closed(self):
+        hooks_dir = Path(self.git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()) / "hooks"
+        (hooks_dir / "secret_scan.py").unlink()
+        self.write("ok.txt", "fine\n")
+        result = self.sh("git add ok.txt && git commit -m ok")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("dev-harness", result.stderr)
+
+
+    def test_installed_hook_never_loads_a_scanner_from_the_worktree(self):
+        # A repo's own hooks/lib/secret_scan.py must not stand in for the installed copy.
+        hooks_dir = self.repo / ".git" / "hooks"
+        (hooks_dir / "secret_scan.py").unlink()
+        self.write("hooks/lib/secret_scan.py", "raise SystemExit(0)\n")
+        self.write("s.txt", GITHUB_TOKEN + "\n")
+        result = self.sh("git add s.txt && git commit -m x")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("secret_scan.py not found", result.stderr)
+
+
+    def test_source_tree_hook_uses_the_plugin_scanner(self):
+        self.write("s.txt", GITHUB_TOKEN + "\n")
+        self.git("add", "s.txt")
+        result = subprocess.run([sys.executable, str(SCRIPTS / "git-hooks" / "pre-commit")], cwd=self.repo,
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("s.txt:1 github-pat", result.stderr)
+
+
+class MergeCommit(Repo):
+    def test_merge_bringing_in_a_secret_is_rejected(self):
+        self.git("switch", "-q", "-c", "side")
+        self.write("k.txt", GITHUB_TOKEN + "\n")
+        self.git("add", "k.txt")
+        self.git("commit", "-q", "--no-verify", "-m", "side")
+        self.git("switch", "-q", "main")
+        result = self.git("merge", "--no-ff", "-m", "merge side", "side", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("k.txt:1 github-pat", result.stderr)
+
+    def test_clean_merge_passes(self):
+        self.git("switch", "-q", "-c", "side")
+        self.write("ok.txt", "fine\n")
+        self.sh("git add ok.txt && git commit -q -m side")
+        self.git("switch", "-q", "main")
+        self.assertEqual(self.git("merge", "-q", "--no-ff", "-m", "merge side", "side", check=False).returncode, 0)
+
+
+class CommitMessage(Repo):
+    def test_token_in_the_message_is_rejected_and_masked(self):
+        self.write("ok.txt", "fine\n")
+        self.git("add", "ok.txt")
+        result = self.git("commit", "-m", f"debug: token was {GITHUB_TOKEN}", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("commit-msg:1 github-pat ghp_", result.stderr)
+        self.assertNotIn(GITHUB_TOKEN, result.stderr + result.stdout)
+
+    def test_home_path_in_the_message_is_rejected(self):
+        self.write("ok.txt", "fine\n")
+        self.git("add", "ok.txt")
+        result = self.git("commit", "-m", f"see {self.home}/notes", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("personal", result.stderr)
+
+    def run_commit_msg(self, text):
+        message = self.tmp / "MSG"
+        message.write_text(text)
+        return subprocess.run([sys.executable, str(self.repo / ".git" / "hooks" / "commit-msg"), str(message)],
+                              cwd=self.repo, env=self.env, capture_output=True, text=True)
+
+    def test_hash_lines_are_scanned_because_dash_m_keeps_them(self):
+        result = self.git("commit", "--allow-empty", "-m", f"#leak {GITHUB_TOKEN}", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("commit-msg:1 github-pat", result.stderr)
+
+    def test_verbose_diff_below_the_scissors_skips_lines_of_the_staged_diff(self):
+        # `git commit -v` shows the staged diff; removing a secret must not be refused.
+        self.write("k.txt", f"{GITHUB_TOKEN}\nkeep {GITHUB_TOKEN}\n")
+        self.git("add", "k.txt")
+        self.git("commit", "-q", "--no-verify", "-m", "leak")
+        self.write("k.txt", f"keep {GITHUB_TOKEN}\n")
+        self.git("add", "k.txt")
+        diff = self.git("diff", "--cached").stdout
+        self.assertIn(f"-{GITHUB_TOKEN}\n", diff)
+        result = self.run_commit_msg(f"remove leaked key\n{SCISSORS}\n{diff}")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def commit_in_editor(self, *args):
+        editor = self.tmp / "editor.sh"
+        editor.write_text('#!/bin/sh\nprintf "subject\\n" | cat - "$1" > "$1.new" && mv "$1.new" "$1"\n')
+        editor.chmod(0o755)
+        return subprocess.run(["git", "commit", "-q", *args], cwd=self.repo, env=dict(self.env, GIT_EDITOR=str(editor)),
+                              capture_output=True, text=True)
+
+    def commit_leak(self):
+        self.write("k.txt", f"{GITHUB_TOKEN}\nkeep\n")
+        self.git("add", "k.txt")
+        self.git("commit", "-q", "--no-verify", "-m", "leak")
+
+    def test_amend_verbose_shows_the_diff_from_the_parent(self):
+        self.commit_leak()
+        self.write("k.txt", "keep\n")
+        self.git("add", "k.txt")
+        self.git("commit", "-q", "-m", "remove")
+        result = self.commit_in_editor("--amend", "-v")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_double_verbose_skips_removed_lines_of_the_unstaged_diff(self):
+        self.commit_leak()
+        self.write("k.txt", "keep\n")
+        self.write("ok.txt", "fine\n")
+        self.git("add", "ok.txt")
+        result = self.commit_in_editor("-v", "-v")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_double_verbose_still_scans_added_lines_of_the_unstaged_diff(self):
+        # Unstaged additions were never scanned by pre-commit, so they are not trusted.
+        self.write("ok.txt", "fine\n")
+        self.git("add", "ok.txt")
+        self.write("w.txt", "x\n")
+        self.git("add", "w.txt")
+        self.git("commit", "-q", "-m", "w")
+        self.write("w.txt", f"x\n{GITHUB_TOKEN}\n")
+        self.write("ok.txt", "fine2\n")
+        self.git("add", "ok.txt")
+        result = self.commit_in_editor("-v", "-v")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("github-pat", result.stderr)
+
+    def test_diff_shaped_lines_not_in_the_staged_diff_are_scanned(self):
+        # With -m nothing is cut at the scissors, so a forged tail would be stored as it is.
+        for forged in (f" {GITHUB_TOKEN}", f"-{GITHUB_TOKEN}"):
+            with self.subTest(forged=forged[0]):
+                result = self.git("commit", "--allow-empty", "-m", f"x\n{SCISSORS}\n{forged}", check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("commit-msg:3 github-pat", result.stderr)
+
+    def test_free_text_below_the_scissors_is_scanned(self):
+        result = self.run_commit_msg("subject\n# ------------------------ >8 ------------------------\n"
+                                     f"note {GITHUB_TOKEN}\n")
+        self.assertIn("commit-msg:3 github-pat", result.stderr)
+
+    def test_body_token_is_reported_with_its_line(self):
+        self.assertIn("commit-msg:2 github-pat", self.run_commit_msg(f"subject\nbody {GITHUB_TOKEN}\n").stderr)
+
+
+class PrePush(Repo):
+    def commit_skipping_hooks(self, name, text, message):
+        self.write(name, text)
+        self.git("add", name)
+        self.git("commit", "-q", "--no-verify", "-m", message)
+
+    def test_secret_added_then_removed_is_still_rejected(self):
+        self.commit_skipping_hooks("k.txt", OPENAI_TOKEN + "\n", "add")
+        self.commit_skipping_hooks("k.txt", "gone\n", "remove")
+        self.git("branch", "other")
+        for command in ("git push origin main", "git push origin other:main", "git push --all origin"):
+            with self.subTest(command=command):
+                result = self.sh(command)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("openai-api-key", result.stderr)
+
+    def test_stale_tracking_ref_does_not_hide_a_commit(self):
+        # The local origin/main claims the remote has the secret commit; the remote does not.
+        self.commit_skipping_hooks("k.txt", OPENAI_TOKEN + "\n", "add")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        result = self.sh("git push origin main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("openai-api-key", result.stderr)
+
+    def test_history_the_remote_already_holds_is_not_rescanned(self):
+        self.commit_skipping_hooks("k.txt", OPENAI_TOKEN + "\n", "old leak")
+        self.git("push", "-q", "--no-verify", "origin", "main")
+        self.git("update-ref", "-d", "refs/remotes/origin/main")
+        self.write("ok.txt", "fine\n")
+        self.sh("git add ok.txt && git commit -q -m ok")
+        result = self.sh("git push origin main")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_unreachable_remote_fails_closed(self):
+        self.write("ok.txt", "fine\n")
+        self.sh("git add ok.txt && git commit -q -m ok")
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        missing = str(self.tmp / "missing.git")
+        result = subprocess.run([sys.executable, str(self.repo / ".git" / "hooks" / "pre-push"), "origin", missing],
+                                input=f"refs/heads/main {head} refs/heads/main {'0' * 40}\n", cwd=self.repo,
+                                env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refusing", result.stderr)
+
+    def test_private_key_committed_past_pre_commit_is_rejected_at_push(self):
+        self.commit_skipping_hooks("notes.txt", PEM, "pem")
+        result = self.sh("git push origin main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("private-key-header", result.stderr)
+
+    def test_token_in_a_commit_message_is_rejected_at_push(self):
+        self.write("ok.txt", "fine\n")
+        self.git("add", "ok.txt")
+        self.git("commit", "-q", "--no-verify", "-m", f"oops {GITHUB_TOKEN}")
+        result = self.sh("git push origin main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("message:1 github-pat", result.stderr)
+        self.assertNotIn(GITHUB_TOKEN, result.stderr)
+
+    def test_token_in_an_annotated_tag_message_is_rejected_at_push(self):
+        self.git("tag", "-a", "v1", "-m", f"release {GITHUB_TOKEN}")
+        result = self.sh("git push origin v1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("tag-message:1 github-pat", result.stderr)
+
+    def test_clean_push_and_branch_delete_pass(self):
+        self.write("ok.txt", "fine\n")
+        self.sh("git add ok.txt && git commit -q -m ok")
+        self.assertEqual(self.sh("git push -q origin main:side").returncode, 0)
+        self.assertEqual(self.sh("git push -q origin :side").returncode, 0)
+
+
+PLACEHOLDER = "api" + "Key = 'sk-live-xxxx'"
+ALLOW = ".dev-harness-" + "allow"
+
+
+def fingerprint(path, kind, text):
+    return hashlib.sha256(f"{path}\0{kind}\0{text}".encode()).hexdigest()[:16]
+
+
+class AllowList(Repo):
+    def listing(self, *entries):
+        return "# reviewed by the user\n" + "".join(f"{fp}  {note}\n" for fp, note in entries)
+
+    def placeholder_entry(self, path="a.md", text=PLACEHOLDER):
+        return fingerprint(path, "generic-secret", text), f"{path}:1 generic-secret"
+
+    def commit_skipping_hooks(self, *names, message="m"):
+        self.git("add", *names)
+        self.git("commit", "-q", "--no-" + "verify", "-m", message)
+
+    def test_listed_line_commits_and_pushes_with_a_notice(self):
+        self.write("a.md", PLACEHOLDER + "\n")
+        self.write(ALLOW, self.listing(self.placeholder_entry()))
+        result = self.sh(f"git add a.md {ALLOW} && git commit -q -m a")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("allowed by " + ALLOW + ": a.md:1 generic-secret", result.stderr)
+        result = self.sh("git push -q origin main")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("allowed by " + ALLOW, result.stderr)
+
+    def test_refusal_prints_the_fingerprint_and_how_to_list_it(self):
+        self.write("a.md", PLACEHOLDER + "\n")
+        result = self.sh("git add a.md && git commit -q -m a")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("fp:" + self.placeholder_entry()[0], result.stderr)
+        self.assertIn(ALLOW, result.stderr)
+
+    def test_entry_only_in_the_work_tree_does_not_allow(self):
+        self.write("a.md", PLACEHOLDER + "\n")
+        self.write(ALLOW, self.listing(self.placeholder_entry()))
+        self.assertNotEqual(self.sh("git add a.md && git commit -q -m a").returncode, 0)
+
+    def test_commit_all_reads_the_allow_file_it_commits(self):
+        self.write("a.md", "x\n")
+        self.write(ALLOW, self.listing())
+        self.git("add", "a.md", ALLOW)
+        self.git("commit", "-q", "-m", "base")
+        self.write("a.md", PLACEHOLDER + "\n")
+        self.write(ALLOW, self.listing(self.placeholder_entry()))
+        result = self.sh("git commit -q -a -m all")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_commit_of_one_path_ignores_an_entry_outside_it(self):
+        self.write("a.md", "x\n")
+        self.write(ALLOW, self.listing())
+        self.git("add", "a.md", ALLOW)
+        self.git("commit", "-q", "-m", "base")
+        self.write("a.md", PLACEHOLDER + "\n")
+        self.write(ALLOW, self.listing(self.placeholder_entry()))
+        self.git("add", ALLOW)
+        self.assertNotEqual(self.sh("git commit -q -m only a.md").returncode, 0)
+
+    def test_changed_line_is_reported_again(self):
+        self.write("a.md", PLACEHOLDER + " # edited\n")
+        self.write(ALLOW, self.listing(self.placeholder_entry()))
+        self.assertNotEqual(self.sh(f"git add a.md {ALLOW} && git commit -q -m a").returncode, 0)
+
+    def test_personal_and_file_name_findings_cannot_be_listed(self):
+        home_line = f"path {self.home}/x"
+        self.write("p.txt", home_line + "\n")
+        self.write(".env", "x\n")
+        self.write(ALLOW, self.listing((fingerprint("p.txt", "personal", home_line), "p.txt:1 personal"),
+                                       (fingerprint(".env", "file-name", ""), ".env file-name")))
+        result = self.sh(f"git add p.txt .env {ALLOW} && git commit -q -m p")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("p.txt:1 personal", result.stderr)
+        self.assertIn(".env:0 file-name", result.stderr)
+
+    def test_allow_path_that_is_not_a_regular_file_fails_closed(self):
+        fp = self.placeholder_entry()[0]
+        self.write("a.md", PLACEHOLDER + "\n")
+        self.write(f"{ALLOW}/{fp}", "x\n")
+        self.assertNotEqual(self.sh(f"git add a.md {ALLOW} && git commit -q -m dir").returncode, 0)
+        self.git("rm", "-q", "-r", "--cached", ALLOW)
+        shutil.rmtree(self.repo / ALLOW)
+        self.write("list.txt", self.listing(self.placeholder_entry()))
+        os.symlink("list.txt", self.repo / ALLOW)
+        result = self.sh(f"git add list.txt {ALLOW} && git commit -q -m link")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refusing", result.stderr)
+
+    def test_push_judges_each_commit_by_its_own_tree(self):
+        self.write("a.md", PLACEHOLDER + "\n")
+        self.commit_skipping_hooks("a.md", message="secret first")
+        self.write(ALLOW, self.listing(self.placeholder_entry()))
+        self.commit_skipping_hooks(ALLOW, message="entry later")
+        result = self.sh("git push -q origin main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("a.md:1 generic-secret", result.stderr)
+
+    def test_message_findings_are_never_allowed(self):
+        self.write("message", PLACEHOLDER + "\n")
+        self.write(ALLOW, self.listing(self.placeholder_entry("message"),
+                                       self.placeholder_entry("commit-msg")))
+        result = self.sh(f"git add message {ALLOW} && git commit -q -m \"{PLACEHOLDER}\"")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("commit-msg:1 generic-secret", result.stderr)
+        self.git("commit", "-q", "--no-" + "verify", "-m", PLACEHOLDER)
+        result = self.sh("git push -q origin main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("message:1 generic-secret", result.stderr)
+
+
+class NoreplyEmail(Repo):
+    def setUp(self):
+        super().setUp()
+        self.noreply = "12345+octocat@users." + "noreply.github.com"
+        self.personal_email = "someone" + "@example.org"
+        self.git("config", "user.email", self.noreply)
+        self.git("config", "--global", "user.email", self.personal_email)
+
+    def test_noreply_commits_but_the_global_email_is_refused(self):
+        self.write("owner.json", f'{{"email": "{self.noreply}"}}\n')
+        result = self.sh("git add owner.json && git commit -q -m owner")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.write("me.txt", f"{self.personal_email}\n")
+        result = self.sh("git add me.txt && git commit -q -m me")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("me.txt:1 personal", result.stderr)
+
+
+class NoPersonal(Repo):
+    personal = False
+
+    def test_home_path_passes_but_tokens_do_not(self):
+        self.write("p.txt", f"path {self.home}/x\n")
+        self.assertEqual(self.sh("git add p.txt && git commit -q -m p").returncode, 0)
+        self.write("s.txt", GITHUB_TOKEN + "\n")
+        self.assertNotEqual(self.sh("git add s.txt && git commit -m s").returncode, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

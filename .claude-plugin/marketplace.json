@@ -2,7 +2,7 @@
   "name": "my-claude-marketplace",
   "owner": {
     "name": "Staler2019",
-    "email": "abcde121234@gmail.com"
+    "email": "56055434+Staler2019@users.noreply.github.com"
   },
   "metadata": {
     "description": "Personal marketplace bundling curated Claude Code skill plugins."
@@ -50,6 +50,11 @@
       "name": "messenger-bubbles",
       "source": "./plugins/messenger-bubbles",
       "description": "Messenger-style transcript: your prompts right-aligned, Claude's replies left-aligned, both in bubbles."
+    },
+    {
+      "name": "dev-harness",
+      "source": "./plugins/dev-harness",
+      "description": "Developer harness: role agents, plan-structure gate, git-discipline guards and a secret scanner with native git hooks."
     }
   ]
 }

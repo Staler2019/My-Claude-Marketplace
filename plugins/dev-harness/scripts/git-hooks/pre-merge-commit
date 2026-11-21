@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""dev-harness pre-merge-commit hook: refuse merge commits that add secrets (see dev_harness_hook.py)."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from dev_harness_hook import main  # noqa: E402
+
+sys.exit(main("commit"))
