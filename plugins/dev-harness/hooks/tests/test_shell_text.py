@@ -10,6 +10,7 @@ HOOKS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HOOKS))
 
 from lib.shell_text import command_segments, without_heredoc_bodies  # noqa: E402
+import lib.shell_text as shell_text  # noqa: E402
 
 ENTRY_POINTS = ("block-fuzzy-kill.py", "guard-repo-discipline.py", "guard-hook-bypass.py")
 
@@ -55,6 +56,73 @@ class CommandSegments(unittest.TestCase):
 
     def test_heredoc_body_is_not_a_segment(self):
         self.assertEqual(list(command_segments("cat <<E\ngit add -A\nE")), [["cat", "<<E"]])
+
+
+    def test_extended_wrappers_stay_out_of_command_segments(self):
+        # Existing guards keep today's segmentation; only strip_wrappers knows timeout/nice/env -i.
+        self.assertEqual(list(command_segments("timeout 5 git add -A")),
+                         [["timeout", "5", "git", "add", "-A"]])
+
+
+class StripWrappers(unittest.TestCase):
+    def test_strips_each_wrapper_with_its_options(self):
+        rows = [
+            ("git push", ["git", "push"]),
+            ("FOO=1 git push", ["git", "push"]),
+            ("sudo -u x git push", ["git", "push"]),
+            ("env -i git push", ["git", "push"]),
+            ("env -u HOME -i A=b git push", ["git", "push"]),
+            ("env --unset=HOME git push", ["git", "push"]),
+            ("timeout 5 git push", ["git", "push"]),
+            ("timeout -s KILL -k 3 10s git push", ["git", "push"]),
+            ("timeout --signal=TERM --preserve-status 5 git push", ["git", "push"]),
+            ("nice git push", ["git", "push"]),
+            ("nice -n 5 git push", ["git", "push"]),
+            ("nice -5 git push", ["git", "push"]),
+            ("nohup time -p command git push", ["git", "push"]),
+            ("exec env timeout 1 nice git push", ["git", "push"]),
+        ]
+        for text, expected in rows:
+            with self.subTest(text=text):
+                self.assertEqual(shell_text.strip_wrappers(text.split()), expected)
+
+    def test_a_bare_wrapper_leaves_nothing(self):
+        self.assertEqual(shell_text.strip_wrappers(["env"]), [])
+        self.assertEqual(shell_text.strip_wrappers(["timeout", "5"]), [])
+
+
+class NestedCommands(unittest.TestCase):
+    def nested(self, text):
+        return list(shell_text.nested_commands(text))
+
+    def test_shell_dash_c(self):
+        for text in ("sh -c 'git push'", "bash -c \"git push\"", "zsh -lc 'git push'",
+                     "/bin/bash -ec 'git push'", "env -i bash -c 'git push'",
+                     "timeout 5 sh -c 'git push'"):
+            with self.subTest(text=text):
+                self.assertEqual(self.nested(text), ["git push"])
+
+    def test_eval(self):
+        self.assertEqual(self.nested("eval git push origin main"), ["git push origin main"])
+        self.assertEqual(self.nested("eval 'git push'"), ["git push"])
+
+    def test_heredoc_fed_to_a_shell(self):
+        self.assertEqual(self.nested("bash <<EOF\ngit push\nEOF"), ["git push"])
+        self.assertEqual(self.nested("sh <<'X'\ngit fetch\ngit push\nX\necho done"),
+                         ["git fetch\ngit push"])
+
+    def test_heredoc_fed_to_git_stdin(self):
+        self.assertEqual(self.nested("git update-ref --stdin <<E\nupdate refs/heads/main x\nE"),
+                         ["update refs/heads/main x"])
+
+    def test_heredoc_fed_to_cat_is_not_a_command(self):
+        self.assertEqual(self.nested("cat <<EOF > f\ngit push\nEOF"), [])
+
+    def test_plain_commands_have_no_nesting(self):
+        self.assertEqual(self.nested("git push; echo 'sh -c x'"), [])
+
+    def test_each_segment_is_looked_into(self):
+        self.assertEqual(self.nested("echo a && sh -c 'git push' || eval ls"), ["git push", "ls"])
 
 
 class EntryPoints(unittest.TestCase):
