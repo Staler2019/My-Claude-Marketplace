@@ -15,10 +15,11 @@ values never reach a commit or a push.
 
 | Part | What it does |
 |---|---|
-| `agents/` | Eight read-only roles: `scout`, `Explore`, `algorithm-chooser`, `arch-suggester`, `spec-auditor`, `plan-verifier`, `security-reviewer`, `verifier` (the last one may run tests). |
+| `agents/` | Eight read-only roles: `scout`, `Explore`, `algorithm-chooser`, `arch-suggester`, `spec-auditor`, `plan-verifier`, `security-reviewer`, `verifier` (the last one may run tests). One write-capable role, `executor`: does one approved Plan unit in the current directory or bails out, never pushes, and ends with `EXECUTOR: DONE <first-sha>..<last-sha>` or `EXECUTOR: BAIL <one-line reason>`. |
 | `skills/` | `plan-preflight` (self-check a Plan before review) and the `arch-suggester` checklist. |
-| `hooks/hooks.json` | PreToolUse guards: `guard-hook-bypass` (no skipping git hooks), `guard-repo-discipline` (stage by file, no blanket checkout), `block-fuzzy-kill`, `backup-before-git-discard`, `require-plan-structure`. |
+| `hooks/hooks.json` | PreToolUse guards: `guard-hook-bypass` (no skipping git hooks), `guard-repo-discipline` (stage by file, no blanket checkout), `block-fuzzy-kill`, `backup-before-git-discard`, `require-plan-structure`; `guard-merge-and-push` (Bash, PowerShell and `mcp__*` tools: no merge, no push to or force over a default branch, no local default-branch move, no push at all from the executor); `guard-write-scope` (Write/Edit in every session: no write into `.git/hooks`, `.git/config`, the profile's `settings*.json` or `plugins/`, or the loaded plugin directory). |
 | `scripts/install-git-hooks` | Installs the secret scanner as native `pre-commit`, `pre-merge-commit`, `commit-msg` and `pre-push` hooks in one repo. |
+| `scripts/score-attempt` | Scores one executor attempt: commits after the base, clean tree, test command passes, changed paths inside `--allow` globs; prints JSON, exits 0 pass / 1 fail / 2 usage. |
 
 ## Secret scanning in git hooks
 
@@ -88,6 +89,26 @@ it are denied, so only the user lists entries. It cannot see the file arrive by 
 `git apply` / `git am` / `patch`, `cp -r` or `tar x` of a directory holding it, checkout,
 restore, merge, cherry-pick or stash of a branch carrying entries, or a clean filter. The
 `allowed by .dev-harness-allow` notice and review of the committed list cover those.
+
+`guard-merge-and-push` is also a check of command text. It sees through wrappers (`sudo`, `env`,
+`timeout`, `nice`, …), `sh -c`, `eval`, heredocs fed to a shell or to `git … --stdin`, and git and
+gh aliases. A push or merge made from a script file, a variable, `curl` with a token, a
+PowerShell backtick escape, an MCP shell or filesystem server, or a `gh api` body read from a
+file beyond the listed forms is out of its reach; a server-side branch protection rule is the
+gate. The default-branch set is `main`, `master` and every `refs/remotes/<remote>/HEAD`; when
+that lookup fails the guard denies and names `git remote set-head <remote> --auto`. Through
+MCP, a tool whose `base` is a default branch is denied too, including a pull request into one;
+`gh pr create` is the route for that.
+
+The executor's no-push rule has the same reach. The executor is not isolated: it runs in the
+current directory with the user's environment, network and credentials, so a push hidden from
+command text would succeed. Choosing the executor's model tier, and capping it, is the dispatcher's
+job, not this plugin's.
+
+`guard-write-scope` covers the Write, Edit, MultiEdit and NotebookEdit tools only; a Bash write
+to `.git/hooks`, git config, the profile or the plugin directory is not caught. When the plugin
+is loaded from a working checkout, that checkout's plugin directory is not editable from a
+session that loads it; edit it from a session without the plugin.
 
 ## License
 
