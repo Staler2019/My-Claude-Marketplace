@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Score one executor attempt mechanically, after it ends.
+
+usage: score-attempt --repo R --base <sha> --test "<cmd>" [--allow <glob>...] [--timeout S]
+
+Four checks: (1) commits — <sha> is an ancestor of HEAD and base..HEAD holds at least one commit;
+(2) clean — no modified, staged or untracked file; (3) tests — <cmd> run with `sh -c` in R exits 0
+within the timeout (default 600 s); (4) scope — every path changed in base..HEAD matches an
+--allow glob (`*` stays within one directory, `**` crosses them); skipped without --allow.
+Prints {"pass", "checks": [{"name", "pass", "detail"}]}; exit 0 pass, 1 fail, 2 usage.
+"""
+import argparse
+import json
+import os
+import signal
+import subprocess
+import sys
+from pathlib import Path, PurePosixPath
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.gitutil import fail, git  # noqa: E402
+
+GIT = ("-c", "core.fsmonitor=false")
+
+
+def run_git(repo: str, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", repo, *GIT, *args], capture_output=True, text=True)
+
+
+def check_commits(repo: str, base: str) -> tuple:
+    if run_git(repo, "merge-base", "--is-ancestor", base, "HEAD").returncode:
+        return False, f"{base} is not an ancestor of HEAD"
+    count = run_git(repo, "rev-list", "--count", f"{base}..HEAD").stdout.strip()
+    return count not in ("", "0"), f"{count or 0} commit(s) after base"
+
+
+def check_clean(repo: str) -> tuple:
+    status = run_git(repo, "status", "--porcelain", "--untracked-files=all").stdout
+    lines = status.splitlines()
+    return not lines, "clean" if not lines else "; ".join(lines[:20])
+
+
+def check_tests(repo: str, command: str, timeout: float) -> tuple:
+    proc = subprocess.Popen(["sh", "-c", command], cwd=repo, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, start_new_session=True)
+    try:
+        output, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        return False, f"timed out after {timeout:g} s"
+    tail = "\n".join(output.splitlines()[-20:])
+    return proc.returncode == 0, f"exit {proc.returncode}" + (f"\n{tail}" if tail else "")
+
+
+def check_scope(repo: str, base: str, allow: list) -> tuple:
+    out = run_git(repo, "diff", "--no-ext-diff", "--name-only", "--no-renames", "-z", f"{base}..HEAD")
+    outside = [p for p in out.stdout.split("\0") if p and not any(
+        PurePosixPath(p).full_match(glob) for glob in allow)]
+    return not outside, "all paths allowed" if not outside else "outside: " + ", ".join(outside)
+
+
+def main(argv: list) -> int:
+    parser = argparse.ArgumentParser(prog="score-attempt")
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--base", required=True)
+    parser.add_argument("--test", required=True)
+    parser.add_argument("--allow", nargs="+", action="extend", default=[])
+    parser.add_argument("--timeout", type=float, default=600)
+    args = parser.parse_args(argv)
+    if not git(args.repo, "rev-parse", "--git-dir"):
+        fail("score-attempt", f"not a git repository: {args.repo}")
+        return 2
+    checks = []
+    for name, (ok, detail) in (
+            ("commits", check_commits(args.repo, args.base)),
+            ("clean", check_clean(args.repo)),
+            ("tests", check_tests(args.repo, args.test, args.timeout)),
+            ("scope", check_scope(args.repo, args.base, args.allow) if args.allow
+             else (True, "no --allow given"))):
+        checks.append({"name": name, "pass": ok, "detail": detail})
+    passed = all(c["pass"] for c in checks)
+    print(json.dumps({"pass": passed, "checks": checks}, ensure_ascii=False))
+    return 0 if passed else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
