@@ -60,7 +60,8 @@ class Registration(unittest.TestCase):
         config = json.loads((HOOKS / "hooks.json").read_text())
         for name, matcher in (("guard-merge-and-push.py", "Bash"),
                               ("guard-merge-and-push.py", "PowerShell"),
-                              ("guard-merge-and-push.py", "mcp__.*")):
+                              ("guard-merge-and-push.py", "mcp__.*"),
+                              ("guard-write-scope.py", "Write|Edit|MultiEdit|NotebookEdit")):
             with self.subTest(hook=name, matcher=matcher):
                 entries = [h for group in config["hooks"]["PreToolUse"] if group.get("matcher") == matcher
                            for h in group["hooks"] if name in h["command"]]
