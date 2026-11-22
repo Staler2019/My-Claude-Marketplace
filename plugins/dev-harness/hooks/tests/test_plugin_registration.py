@@ -13,6 +13,7 @@ DENYING = {
     "guard-repo-discipline.py": "git add -A",
     "block-fuzzy-kill.py": "pkill foo",
     "guard-hook-bypass.py": "git commit -n -m x",
+    "guard-merge-and-push.py": "gh pr merge 1",
 }
 REGISTERED = {
     "guard-hook-bypass.py": "Bash",
@@ -53,6 +54,18 @@ class Registration(unittest.TestCase):
                 entries = [h for group in config["hooks"]["PreToolUse"] if group.get("matcher") == matcher
                            for h in group["hooks"] if name in h["command"]]
                 self.assertEqual(len(entries), 1)
+                self.assertIn(f"${{CLAUDE_PLUGIN_ROOT}}/hooks/{name}", entries[0]["command"])
+
+    def test_authority_guards_block_on_failure_in_each_group(self):
+        config = json.loads((HOOKS / "hooks.json").read_text())
+        for name, matcher in (("guard-merge-and-push.py", "Bash"),
+                              ("guard-merge-and-push.py", "PowerShell"),
+                              ("guard-merge-and-push.py", "mcp__.*")):
+            with self.subTest(hook=name, matcher=matcher):
+                entries = [h for group in config["hooks"]["PreToolUse"] if group.get("matcher") == matcher
+                           for h in group["hooks"] if name in h["command"]]
+                self.assertEqual(len(entries), 1)
+                self.assertEqual((entries[0]["timeout"], entries[0].get("onFailure")), (10, "block"))
                 self.assertIn(f"${{CLAUDE_PLUGIN_ROOT}}/hooks/{name}", entries[0]["command"])
 
 
