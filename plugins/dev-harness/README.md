@@ -95,7 +95,12 @@ restore, merge, cherry-pick or stash of a branch carrying entries, or a clean fi
 gh aliases. A push or merge made from a script file, a variable, `curl` with a token, a
 PowerShell backtick escape, an MCP shell or filesystem server, or a `gh api` body read from a
 file beyond the listed forms is out of its reach; a server-side branch protection rule is the
-gate. The default-branch set is `main`, `master` and every `refs/remotes/<remote>/HEAD`; when
+gate. Spellings it does not yet read: `env GIT_DIR=… git …`, a default branch named in another
+letter case (`refs/heads/MAIN` on a case-insensitive file system), clustered or glued `-B`
+(`checkout -fB main`), `rebase --root <default>`, wildcard fetch refspecs into `refs/heads/*`,
+`update-ref --stdin` fed by a pipe or a here-string, `gh api` given a full URL, `git pull <r>
+<x>:<default>`, and PowerShell's `git.exe`, `pwsh -c` and `Invoke-Expression`. Quoted text that
+looks like a redirect into `refs/heads/` is denied. The default-branch set is `main`, `master` and every `refs/remotes/<remote>/HEAD`; when
 that lookup fails the guard denies and names `git remote set-head <remote> --auto`. Through
 MCP, a tool whose `base` is a default branch is denied too, including a pull request into one;
 `gh pr create` is the route for that.
