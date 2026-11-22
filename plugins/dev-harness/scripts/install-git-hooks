@@ -9,11 +9,14 @@ run). Refuses a linked worktree (its hooks dir is shared), a repo with core.hook
 before writing anything, then prints each path it wrote.
 """
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from lib import gitutil  # noqa: E402
+from lib.gitutil import git  # noqa: E402
+
 SOURCES = {
     "pre-commit": HERE / "git-hooks" / "pre-commit",
     "pre-merge-commit": HERE / "git-hooks" / "pre-merge-commit",
@@ -26,13 +29,8 @@ MARKER = "dev-harness"
 HOOK_NAMES = ("pre-commit", "pre-merge-commit", "commit-msg", "pre-push")
 
 
-def git(repo: str, *args: str) -> str:
-    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True).stdout.strip()
-
-
 def fail(message: str) -> int:
-    print(f"install-git-hooks: {message}", file=sys.stderr)
-    return 1
+    return gitutil.fail("install-git-hooks", message)
 
 
 def main(argv) -> int:
