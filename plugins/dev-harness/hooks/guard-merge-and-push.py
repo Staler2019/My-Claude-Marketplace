@@ -30,7 +30,9 @@ REDIRECT = re.compile(r""">>?\|?\s*("[^"]*"|'[^']*'|[^\s;&|]+)""")
 STDIN_REF = re.compile(r"^\s*(?:update|create|delete)\s+(\S+)", re.M)
 
 GIT_VALUE_OPTIONS = {"-C", "-c", "--config-env", "--git-dir", "--work-tree", "--namespace",
-                     "--super-prefix", "--exec-path"}
+                     "--super-prefix", "--exec-path", "--attr-source", "--list-cmds"}
+# Shell words that may open a segment before the command they run (`then git push`, `{ git …`).
+SHELL_KEYWORDS = {"!", "{", "}", "if", "then", "elif", "else", "fi", "while", "until", "do", "done"}
 # Subcommands git runs itself; anything else may be a user alias.
 GIT_BUILTINS = set("""add am annotate apply archive bisect blame branch bundle cat-file checkout
 checkout-index cherry cherry-pick citool clean clone commit commit-tree config count-objects
@@ -152,6 +154,8 @@ class Judge:
                     break
                 env[found.group(1)] = found.group(2)
             words = strip_wrappers(words)
+            while words and words[0] in SHELL_KEYWORDS:
+                words = strip_wrappers(words[1:])
             if not words:
                 continue
             prog = words[0].rsplit("/", 1)[-1]
@@ -206,7 +210,7 @@ class Judge:
             self.push(rest, repo)
         elif sub in ("send-pack", "http-push"):
             deny(f"git {sub} pushes refs directly")
-        elif sub == "subtree" and rest[:1] == ["push"]:
+        elif sub == "subtree" and "push" in rest:
             deny("git subtree push")
         elif sub == "branch":
             self.branch(rest, repo)
@@ -275,7 +279,7 @@ class Judge:
                 deny(f"wildcard refspec {refspec}")
             if ":" in refspec:
                 destination = refspec.split(":", 1)[1]
-            elif refspec == "HEAD":
+            elif refspec in ("HEAD", "@"):
                 destination = repo.current_branch() or ""
             else:
                 destination = refspec

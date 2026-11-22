@@ -147,6 +147,18 @@ class PushToDefault(Repo):
                            "bash <<EOF\ngit push --force\nEOF", "eval git push origin main",
                            "sh -c \"sh -c 'git push origin main'\"")
 
+    def test_shell_control_structures(self):
+        self.assert_denied("if true; then git push origin HEAD:main; fi", "{ git push origin HEAD:main; }",
+                           "! git push origin HEAD:main", "for x in a; do git push origin HEAD:main; done",
+                           "while false; do :; done; until true; do git push -f; done",
+                           "if false; then :; elif true; then git push -f; else :; fi")
+
+    def test_subtree_push_after_options(self):
+        self.assert_denied("git subtree -P x push origin main", "git subtree --prefix=x push origin main")
+
+    def test_value_taking_global_options(self):
+        self.assert_denied("git --attr-source HEAD push origin HEAD:main")
+
     def test_feature_pushes_are_allowed(self):
         self.assert_allowed("git push origin feat/x", "git push", "git push -u origin feat/x",
                             "git push origin HEAD:feat/y", "git push origin --delete feat/old",
@@ -157,7 +169,7 @@ class PushToDefault(Repo):
 class PushFromRepoState(Repo):
     def test_bare_push_on_the_default_branch(self):
         git(self.repo, "switch", "-q", "main")
-        self.assert_denied("git push", "git push origin", "git push origin HEAD")
+        self.assert_denied("git push", "git push origin", "git push origin HEAD", "git push origin @")
 
     def test_bare_push_whose_upstream_is_the_default_branch(self):
         git(self.repo, "branch", "-q", "--set-upstream-to=origin/main", "feat/x")
@@ -179,6 +191,8 @@ class PushFromRepoState(Repo):
         git(self.repo, "config", "alias.pm", "push origin main")
         git(self.repo, "config", "alias.sp", "!git push --force")
         self.assert_denied("git pm", "git sp")
+        git(self.repo, "config", "alias.pf", "!f() { git push origin HEAD:main; }; f")
+        self.assert_denied("git pf", "git -c 'alias.q=!f() { git push -f; }; f' q")
 
     def test_repo_named_by_dash_c_or_cd_from_outside(self):
         outside = self.tmp / "elsewhere"
@@ -236,6 +250,10 @@ class Executor(Repo):
 
     def test_the_same_commands_pass_for_the_main_session(self):
         self.assert_allowed("git push origin feat/x", "gh api -X POST repos/o/r/issues -f title=t")
+
+    def test_control_structures_and_subtree_options(self):
+        self.assert_denied("if true; then git push origin feat/x; fi", "git subtree -P x push origin feat/x",
+                           agent_type=EXECUTOR)
 
     def test_executor_may_read_and_commit(self):
         self.assert_allowed("git status", "git commit -m x", "gh pr view 1", agent_type=EXECUTOR)
